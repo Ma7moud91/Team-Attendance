@@ -1,0 +1,6 @@
+{
+  "name": "Team Attendance",
+  "description": "Manage team members, record daily attendance, track overtime, approve entries, and generate monthly reports offline-first with secure cloud sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
