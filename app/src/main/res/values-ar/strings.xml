@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">حضور الفريق</string>
+    <string name="attendance">الحضور</string>
+    <string name="overtime">الوقت الإضافي</string>
+    <string name="settings">الإعدادات</string>
+    <string name="inbox">الوارد</string>
+    <string name="team">الفريق</string>
+    <string name="clock_in">تسجيل الدخول</string>
+    <string name="clock_out">تسجيل الخروج</string>
+    <string name="approve">موافقة</string>
+    <string name="reject">رفض</string>
+    <string name="status">الحالة</string>
+    <string name="date">التاريخ</string>
+    <string name="employee">موظف</string>
+    <string name="admin">مدير</string>
+    <string name="supervisor">مشرف</string>
+    <string name="profile_picture">الصورة الشخصية</string>
+    <string name="change_password">تغيير كلمة المرور</string>
+    <string name="language">اللغة</string>
+    <string name="theme">المظهر</string>
+    <string name="export">تصدير</string>
+    <string name="overtime_chart">تحليل الوقت الإضافي</string>
+</resources>

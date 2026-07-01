@@ -11,7 +11,12 @@ import com.example.data.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.io.File
-import java.io.FileWriter
+import java.io.FileOutputStream
+import org.dhatim.fastexcel.Workbook
+import android.graphics.pdf.PdfDocument
+import android.graphics.Paint
+import android.graphics.Color
+import android.graphics.Canvas
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -39,6 +44,12 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         initialValue = emptyList()
     )
 
+    val messages = repository.allMessages.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     // Current State
     private val _currentUser = MutableStateFlow<Member?>(null)
     val currentUser: StateFlow<Member?> = _currentUser.asStateFlow()
@@ -48,6 +59,23 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
     private val _loginError = MutableStateFlow<String?>(null)
     val loginError: StateFlow<String?> = _loginError.asStateFlow()
+
+    private val _appTheme = MutableStateFlow("System Default")
+    val appTheme: StateFlow<String> = _appTheme.asStateFlow()
+
+    private val _appLanguage = MutableStateFlow("English")
+    val appLanguage: StateFlow<String> = _appLanguage.asStateFlow()
+
+    private val _notifications = MutableStateFlow<List<AppNotification>>(emptyList())
+    val notifications: StateFlow<List<AppNotification>> = _notifications.asStateFlow()
+
+    fun updateTheme(theme: String) {
+        _appTheme.value = theme
+    }
+
+    fun updateLanguage(language: String) {
+        _appLanguage.value = language
+    }
 
     private val _isOfflineMode = MutableStateFlow(false)
     val isOfflineMode: StateFlow<Boolean> = _isOfflineMode.asStateFlow()
@@ -80,10 +108,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     init {
         // Pre-populate with seed data if empty
         viewModelScope.launch {
-            members.collect { memberList ->
-                if (memberList.isEmpty()) {
-                    seedInitialData()
-                }
+            if (repository.getMemberCount() == 0) {
+                seedInitialData()
             }
         }
     }
@@ -146,18 +172,10 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         return false
     }
 
-    fun login(username: String, pword: String): Boolean {
+    suspend fun login(username: String, pword: String): Boolean {
         _loginError.value = null
-        if (username.lowercase() == "admin" && pword == "C3a12345") {
-            val adminUser = members.value.firstOrNull { it.role == "ADMIN" } ?: Member(name = "Alice Smith", role = "ADMIN", email = "alice.admin@work.com")
-            _currentUser.value = adminUser
-            _isLoggedIn.value = true
-            return true
-        }
 
-        val matchedMember = members.value.firstOrNull {
-            it.email.equals(username, ignoreCase = true) || it.name.equals(username, ignoreCase = true)
-        }
+        val matchedMember = repository.getMemberByEmailOrName(username)
 
         if (matchedMember != null) {
             // For other team members, fetch custom password (default: "12345")
@@ -171,16 +189,14 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 return false
             }
         } else {
-            _loginError.value = "Username or Email not found. Try 'admin' or seeded emails like 'normal.user@work.com'."
+            _loginError.value = "Username or Email not found."
             return false
         }
     }
 
-    fun loginWithMicrosoft365(email: String): Boolean {
+    suspend fun loginWithMicrosoft365(email: String): Boolean {
         _loginError.value = null
-        val matchedMember = members.value.firstOrNull {
-            it.email.equals(email, ignoreCase = true)
-        }
+        val matchedMember = repository.getMemberByEmailOrName(email)
         if (matchedMember != null) {
             _currentUser.value = matchedMember
             _isLoggedIn.value = true
@@ -247,7 +263,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     // Role-based Attendance Operations
 
     // Employee Clock-In
-    fun employeeClockIn() {
+    fun employeeClockIn(locationData: String? = null) {
         val user = _currentUser.value ?: return
         viewModelScope.launch {
             val today = getCurrentDateString()
@@ -259,6 +275,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         date = today,
                         isPresent = true,
                         punchInTime = getCurrentTimeString(),
+                        locationData = locationData,
                         isSynced = false
                     )
                 )
@@ -267,16 +284,18 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     // Employee Clock-Out with optional Overtime hours
-    fun employeeClockOut(overtime: Double) {
+    fun employeeClockOut(overtime: Double, locationData: String? = null) {
         val user = _currentUser.value ?: return
         viewModelScope.launch {
             val today = getCurrentDateString()
             val existing = repository.getAttendanceForMemberAndDate(user.id, today)
             if (existing != null) {
+                val locToSave = if (locationData != null) "${existing.locationData ?: ""} | Out: $locationData" else existing.locationData
                 repository.insertAttendance(
                     existing.copy(
                         punchOutTime = getCurrentTimeString(),
                         overtimeHours = overtime,
+                        locationData = locToSave,
                         isSynced = false
                     )
                 )
@@ -311,29 +330,94 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     fun approveAttendanceRecord(attendanceId: Long) {
         val approver = _currentUser.value ?: return
         viewModelScope.launch {
+            val record = attendanceRecords.value.find { it.id == attendanceId } ?: return@launch
             repository.approveAttendance(attendanceId, approver.id)
+            
+            // Send notification to employee
+            repository.insertNotification(
+                AppNotification(
+                    memberId = record.memberId,
+                    title = "Attendance Approved",
+                    message = "Your attendance for ${record.date} has been approved by ${approver.name}."
+                )
+            )
+        }
+    }
+
+    fun rejectAttendanceRecord(attendanceId: Long, reason: String) {
+        val approver = _currentUser.value ?: return
+        viewModelScope.launch {
+            val record = attendanceRecords.value.find { it.id == attendanceId } ?: return@launch
+            repository.rejectAttendance(attendanceId, reason)
+            
+            // Send notification to employee
+            repository.insertNotification(
+                AppNotification(
+                    memberId = record.memberId,
+                    title = "Attendance Rejected",
+                    message = "Your attendance for ${record.date} has been rejected. Reason: $reason"
+                )
+            )
         }
     }
 
     fun approveAllPendingRecords() {
         val approver = _currentUser.value ?: return
         viewModelScope.launch {
-            val pending = attendanceRecords.value.filter { it.isPresent && it.approvedBySupervisorId == null }
+            val pending = attendanceRecords.value.filter { it.isPresent && it.status == "PENDING" && it.approvedBySupervisorId == null }
             for (record in pending) {
                 repository.approveAttendance(record.id, approver.id)
+                repository.insertNotification(
+                    AppNotification(
+                        memberId = record.memberId,
+                        title = "Attendance Approved",
+                        message = "Your attendance for ${record.date} has been approved by ${approver.name}."
+                    )
+                )
             }
         }
     }
 
+    fun loadNotifications(memberId: Long) {
+        viewModelScope.launch {
+            repository.getNotificationsForMember(memberId).collect {
+                _notifications.value = it
+            }
+        }
+    }
+
+    fun markNotificationAsRead(notificationId: Long) {
+        viewModelScope.launch {
+            repository.markNotificationAsRead(notificationId)
+        }
+    }
+
     // Add new team member
-    fun addTeamMember(name: String, role: String, email: String) {
+    fun addTeamMember(name: String, title: String, role: String, email: String, requiresLocation: Boolean) {
         viewModelScope.launch {
             repository.insertMember(
                 Member(
                     name = name,
+                    title = title,
                     role = role,
                     email = email,
+                    requiresLocation = requiresLocation,
                     isActive = true
+                )
+            )
+        }
+    }
+
+    // Edit team member
+    fun editTeamMember(member: Member, name: String, title: String, role: String, email: String, requiresLocation: Boolean) {
+        viewModelScope.launch {
+            repository.insertMember(
+                member.copy(
+                    name = name,
+                    title = title,
+                    role = role,
+                    email = email,
+                    requiresLocation = requiresLocation
                 )
             )
         }
@@ -403,93 +487,189 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    // Export Database
+    fun exportDatabase(context: Context) {
+        viewModelScope.launch {
+            try {
+                val dbFile = context.getDatabasePath("attendance_database")
+                if (dbFile.exists()) {
+                    val exportFile = File(context.cacheDir, "attendance_database_backup.db")
+                    dbFile.copyTo(exportFile, overwrite = true)
+                    _exportResult.value = "Database exported successfully!"
+                    shareFile(context, exportFile, "application/octet-stream", "Share Database Backup")
+                } else {
+                    _exportResult.value = "Database file not found."
+                }
+            } catch (e: Exception) {
+                _exportResult.value = "Failed to export database: ${e.localizedMessage}"
+            }
+        }
+    }
+
+    // Import Database
+    fun importDatabase(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val dbFile = context.getDatabasePath("attendance_database")
+                val inputStream = context.contentResolver.openInputStream(uri)
+                val outputStream = java.io.FileOutputStream(dbFile)
+                inputStream?.copyTo(outputStream)
+                inputStream?.close()
+                outputStream.close()
+                _exportResult.value = "Database imported successfully! Please restart the app."
+            } catch (e: Exception) {
+                _exportResult.value = "Failed to import database: ${e.localizedMessage}"
+            }
+        }
+    }
+
     // Clear Export Result
     fun clearExportResult() {
         _exportResult.value = null
     }
 
-    // Export Reports to Excel (CSV)
+    // Export Reports to Excel
     fun exportToExcel(context: Context) {
         viewModelScope.launch {
             val recordList = attendanceRecords.value
             val memberList = members.value
             val memberMap = memberList.associateBy { it.id }
 
-            val csvContent = StringBuilder()
-            csvContent.append("Date,Employee Name,Role,Email,Status,Clock In,Clock Out,Overtime (Hours),Approval Status\n")
-
-            for (record in recordList) {
-                val member = memberMap[record.memberId]
-                val name = member?.name ?: "Unknown"
-                val role = member?.role ?: "N/A"
-                val email = member?.email ?: "N/A"
-                val status = if (record.isPresent) "Present" else "Absent"
-                val inTime = record.punchInTime ?: "-"
-                val outTime = record.punchOutTime ?: "-"
-                val overtime = record.overtimeHours
-                val approval = if (record.approvedBySupervisorId != null) "Approved" else "Pending"
-
-                csvContent.append("\"${record.date}\",\"$name\",\"$role\",\"$email\",\"$status\",\"$inTime\",\"$outTime\",$overtime,\"$approval\"\n")
-            }
-
             try {
-                val file = File(context.cacheDir, "Monthly_Attendance_Report.csv")
-                val writer = FileWriter(file)
-                writer.write(csvContent.toString())
-                writer.close()
+                val file = File(context.cacheDir, "Monthly_Attendance_Report.xlsx")
+                val fos = FileOutputStream(file)
+                val wb = Workbook(fos, "Attendance", "1.0")
+                val ws = wb.newWorksheet("Report")
+
+                ws.value(0, 0, "Date")
+                ws.value(0, 1, "Employee Name")
+                ws.value(0, 2, "Role")
+                ws.value(0, 3, "Email")
+                ws.value(0, 4, "Status")
+                ws.value(0, 5, "Clock In")
+                ws.value(0, 6, "Clock Out")
+                ws.value(0, 7, "Overtime (Hours)")
+                ws.value(0, 8, "Approval Status")
+
+                for (i in recordList.indices) {
+                    val record = recordList[i]
+                    val member = memberMap[record.memberId]
+                    val name = member?.name ?: "Unknown"
+                    val role = member?.role ?: "N/A"
+                    val email = member?.email ?: "N/A"
+                    val status = if (record.isPresent) "Present" else "Absent"
+                    val inTime = record.punchInTime ?: "-"
+                    val outTime = record.punchOutTime ?: "-"
+                    val overtime = record.overtimeHours
+                    val approval = if (record.approvedBySupervisorId != null) "Approved" else "Pending"
+
+                    ws.value(i + 1, 0, record.date)
+                    ws.value(i + 1, 1, name)
+                    ws.value(i + 1, 2, role)
+                    ws.value(i + 1, 3, email)
+                    ws.value(i + 1, 4, status)
+                    ws.value(i + 1, 5, inTime)
+                    ws.value(i + 1, 6, outTime)
+                    ws.value(i + 1, 7, overtime)
+                    ws.value(i + 1, 8, approval)
+                }
+                
+                wb.finish()
+                fos.close()
 
                 _exportResult.value = "Excel report generated successfully!"
-                shareFile(context, file, "text/csv", "Share Attendance CSV Report")
+                shareFile(context, file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Share Attendance Excel Report")
             } catch (e: Exception) {
                 _exportResult.value = "Failed to export report: ${e.localizedMessage}"
             }
         }
     }
 
-    // Export Reports to PDF Format
-    fun exportToPDF(context: Context) {
+    // Updated Export Reports to PDF Format with filtering
+    fun exportToPDF(context: Context, targetMemberId: Long? = null, overtimeOnly: Boolean = false) {
         viewModelScope.launch {
-            val recordList = attendanceRecords.value
+            val fullRecordList = attendanceRecords.value
             val memberList = members.value
             val memberMap = memberList.associateBy { it.id }
 
-            val pdfContent = StringBuilder()
-            pdfContent.append("=====================================================\n")
-            pdfContent.append("          TEAM ATTENDANCE & PAYROLL SUMMARY REPORT   \n")
-            pdfContent.append("          Generated on: ${getCurrentDateString()} ${getCurrentTimeString()} \n")
-            pdfContent.append("=====================================================\n\n")
+            val recordList = fullRecordList.filter { 
+                (targetMemberId == null || it.memberId == targetMemberId) && 
+                (!overtimeOnly || it.overtimeHours > 0)
+            }
 
-            // Add simple summary metrics
-            val totalPresent = recordList.count { it.isPresent }
-            val totalOvertime = recordList.sumOf { it.overtimeHours }
-            pdfContent.append("Total Employee Attendance Days: $totalPresent\n")
-            pdfContent.append("Total Accumulated Overtime Hours: ${String.format("%.1f", totalOvertime)} hrs\n")
-            pdfContent.append("Offline Synchronized Backup Status: Verified Secure\n")
-            pdfContent.append("-----------------------------------------------------\n\n")
-
-            pdfContent.append("DETAILED LOG:\n\n")
-            for (record in recordList) {
-                val member = memberMap[record.memberId]
-                val name = member?.name ?: "Unknown"
-                val status = if (record.isPresent) "PRESENT" else "ABSENT"
-                val inTime = record.punchInTime ?: "N/A"
-                val outTime = record.punchOutTime ?: "N/A"
-                val approved = if (record.approvedBySupervisorId != null) "APPROVED" else "PENDING"
-                
-                pdfContent.append("Date: ${record.date} | Name: $name\n")
-                pdfContent.append("Status: $status | In: $inTime | Out: $outTime\n")
-                pdfContent.append("Overtime Hours: ${record.overtimeHours} | Approval: $approved\n")
-                pdfContent.append("-----------------------------------------------------\n")
+            if (recordList.isEmpty()) {
+                _exportResult.value = "No records found for the selected filter."
+                return@launch
             }
 
             try {
-                val file = File(context.cacheDir, "Monthly_Attendance_Report.txt")
-                val writer = FileWriter(file)
-                writer.write(pdfContent.toString())
-                writer.close()
+                val document = PdfDocument()
+                val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
+                var page = document.startPage(pageInfo)
+                var canvas = page.canvas
+                val paint = Paint()
+                paint.color = Color.BLACK
+                paint.textSize = 12f
+                var yOffset = 50f
+
+                fun drawLine(text: String) {
+                    canvas.drawText(text, 50f, yOffset, paint)
+                    yOffset += 20f
+                    if (yOffset > 800f) {
+                        document.finishPage(page)
+                        page = document.startPage(pageInfo)
+                        canvas = page.canvas
+                        yOffset = 50f
+                    }
+                }
+
+                val title = if (overtimeOnly) "OVERTIME SUMMARY REPORT" else "TEAM ATTENDANCE & PAYROLL SUMMARY REPORT"
+                drawLine(title)
+                drawLine("Generated on: ${getCurrentDateString()} ${getCurrentTimeString()}")
+                
+                targetMemberId?.let { id ->
+                    val name = memberMap[id]?.name ?: "Unknown"
+                    drawLine("Filter Applied: Employee - $name")
+                }
+                if (overtimeOnly) drawLine("Filter Applied: Overtime Only")
+
+                drawLine("-----------------------------------------------------")
+
+                val totalPresent = recordList.count { it.isPresent }
+                val totalOvertime = recordList.sumOf { it.overtimeHours }
+                drawLine("Total Employee Attendance Days: $totalPresent")
+                drawLine("Total Accumulated Overtime Hours: ${String.format("%.1f", totalOvertime)} hrs")
+                drawLine("Offline Synchronized Backup Status: Verified Secure")
+                drawLine("-----------------------------------------------------")
+                drawLine("")
+                drawLine("DETAILED LOG:")
+                drawLine("")
+
+                for (record in recordList) {
+                    val member = memberMap[record.memberId]
+                    val name = member?.name ?: "Unknown"
+                    val status = record.status
+                    val inTime = record.punchInTime ?: "N/A"
+                    val outTime = record.punchOutTime ?: "N/A"
+                    val approved = if (record.approvedBySupervisorId != null) "APPROVED" else "PENDING"
+
+                    drawLine("Date: ${record.date} | Name: $name")
+                    drawLine("Status: $status | In: $inTime | Out: $outTime")
+                    drawLine("Overtime Hours: ${record.overtimeHours} | Approval: $approved")
+                    drawLine("-----------------------------------------------------")
+                }
+
+                document.finishPage(page)
+
+                val fileName = if (targetMemberId != null) "Employee_Attendance_${targetMemberId}.pdf" else if (overtimeOnly) "Overtime_Report.pdf" else "Monthly_Attendance_Report.pdf"
+                val file = File(context.cacheDir, fileName)
+                val fos = FileOutputStream(file)
+                document.writeTo(fos)
+                document.close()
+                fos.close()
 
                 _exportResult.value = "PDF report compiled successfully!"
-                shareFile(context, file, "text/plain", "Share Attendance PDF Summary Report")
+                shareFile(context, file, "application/pdf", "Share Attendance PDF Summary Report")
             } catch (e: Exception) {
                 _exportResult.value = "Failed to compile report: ${e.localizedMessage}"
             }
@@ -515,12 +695,17 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     // Helper date-time methods
-    private fun getCurrentDateString(): String {
+    fun getCurrentDateString(): String {
         val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         return sdf.format(Date())
     }
 
-    private fun getYesterdayDateString(): String {
+    fun getFullFormattedDate(): String {
+        val sdf = SimpleDateFormat("EEEE, MMMM dd, yyyy", Locale.getDefault())
+        return sdf.format(Date())
+    }
+
+    fun getYesterdayDateString(): String {
         val cal = Calendar.getInstance()
         cal.add(Calendar.DATE, -1)
         val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
@@ -621,5 +806,36 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
     fun clearExcelImportResult() {
         _excelImportResult.value = null
+    }
+
+    fun sendMessageToAdmin(content: String) {
+        val user = _currentUser.value ?: return
+        viewModelScope.launch {
+            repository.insertMessage(
+                InboxMessage(
+                    senderId = user.id,
+                    senderName = user.name,
+                    content = content
+                )
+            )
+        }
+    }
+
+    fun markMessageAsRead(messageId: Long) {
+        viewModelScope.launch {
+            repository.markMessageAsRead(messageId)
+        }
+    }
+
+    fun updateMemberProfileImage(memberId: Long, uri: String) {
+        viewModelScope.launch {
+            repository.updateMemberProfileImage(memberId, uri)
+            // If current user, update session state
+            _currentUser.value?.let { current ->
+                if (current.id == memberId) {
+                    _currentUser.value = current.copy(profileImage = uri)
+                }
+            }
+        }
     }
 }

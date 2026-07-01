@@ -22,6 +22,12 @@ interface AttendanceDao {
     @Query("SELECT * FROM members WHERE id = :id LIMIT 1")
     suspend fun getMemberById(id: Long): Member?
 
+    @Query("SELECT COUNT(*) FROM members")
+    suspend fun getMemberCount(): Int
+
+    @Query("SELECT * FROM members WHERE email = :identifier OR name = :identifier LIMIT 1")
+    suspend fun getMemberByEmailOrName(identifier: String): Member?
+
     // Attendance Queries
     @Query("SELECT * FROM attendance WHERE date = :date")
     fun getAttendanceForDate(date: String): Flow<List<Attendance>>
@@ -47,8 +53,14 @@ interface AttendanceDao {
     @Query("SELECT * FROM attendance WHERE date = :date AND memberId = :memberId LIMIT 1")
     suspend fun getAttendanceForMemberAndDate(memberId: Long, date: String): Attendance?
 
-    @Query("UPDATE attendance SET approvedBySupervisorId = :supervisorId WHERE id = :id")
+    @Query("UPDATE attendance SET approvedBySupervisorId = :supervisorId, status = 'APPROVED' WHERE id = :id")
     suspend fun approveAttendance(id: Long, supervisorId: Long)
+
+    @Query("UPDATE attendance SET status = 'REJECTED', rejectionReason = :reason WHERE id = :id")
+    suspend fun rejectAttendance(id: Long, reason: String)
+
+    @Query("SELECT * FROM attendance WHERE id = :id LIMIT 1")
+    suspend fun getAttendanceById(id: Long): Attendance?
 
     @Query("UPDATE attendance SET isSynced = 1 WHERE isSynced = 0")
     suspend fun markAllAsSynced()
@@ -62,4 +74,27 @@ interface AttendanceDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSyncLog(log: SyncLog): Long
+
+    // Message Queries
+    @Query("SELECT * FROM messages ORDER BY timestamp DESC")
+    fun getAllMessages(): Flow<List<InboxMessage>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMessage(message: InboxMessage): Long
+
+    @Query("UPDATE messages SET isRead = 1 WHERE id = :id")
+    suspend fun markMessageAsRead(id: Long)
+
+    // Notification Queries
+    @Query("SELECT * FROM notifications WHERE memberId = :memberId ORDER BY timestamp DESC")
+    fun getNotificationsForMember(memberId: Long): Flow<List<AppNotification>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertNotification(notification: AppNotification): Long
+
+    @Query("UPDATE notifications SET isRead = 1 WHERE id = :id")
+    suspend fun markNotificationAsRead(id: Long)
+
+    @Query("UPDATE members SET profileImage = :imageUri WHERE id = :memberId")
+    suspend fun updateMemberProfileImage(memberId: Long, imageUri: String)
 }

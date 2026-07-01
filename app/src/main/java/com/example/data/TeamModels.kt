@@ -7,8 +7,11 @@ import androidx.room.PrimaryKey
 data class Member(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
+    val title: String = "",
     val role: String, // "ADMIN", "SUPERVISOR", "EMPLOYEE"
     val email: String,
+    val requiresLocation: Boolean = false,
+    val profileImage: String? = null,
     val isActive: Boolean = true
 )
 
@@ -21,8 +24,21 @@ data class Attendance(
     val punchInTime: String? = null, // "HH:MM"
     val punchOutTime: String? = null, // "HH:MM"
     val overtimeHours: Double = 0.0,
-    val approvedBySupervisorId: Long? = null, // null if pending, Long supervisor ID if approved
+    val locationData: String? = null, // "Lat, Lng"
+    val status: String = "PENDING", // "PENDING", "APPROVED", "REJECTED"
+    val approvedBySupervisorId: Long? = null, // Long supervisor ID if approved
+    val rejectionReason: String? = null,
     val isSynced: Boolean = false
+)
+
+@Entity(tableName = "notifications")
+data class AppNotification(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val memberId: Long,
+    val title: String,
+    val message: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val isRead: Boolean = false
 )
 
 @Entity(tableName = "sync_logs")
@@ -32,4 +48,14 @@ data class SyncLog(
     val recordsSynced: Int,
     val status: String, // "SUCCESS", "FAILED"
     val message: String
+)
+
+@Entity(tableName = "messages")
+data class InboxMessage(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val senderId: Long,
+    val senderName: String,
+    val content: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val isRead: Boolean = false
 )

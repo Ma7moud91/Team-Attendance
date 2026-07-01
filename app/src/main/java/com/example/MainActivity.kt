@@ -2,7 +2,14 @@ package com.example
 
 import android.os.Bundle
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.LocationServices
+import com.example.ui.fetchLocationAndClock
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -38,32 +45,61 @@ import com.example.data.Attendance
 import com.example.data.Member
 import com.example.data.SyncLog
 import com.example.ui.AttendanceViewModel
+import com.example.ui.TeamMembersDashboard
+import com.example.ui.SettingsView
+import com.example.ui.InboxView
+import com.example.ui.ContactAdminView
+import com.example.ui.BiometricHelper
+import com.example.ui.OvertimeDashboardWidget
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private val viewModel: AttendanceViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme {
-                val isLoggedIn by viewModel.isLoggedIn.collectAsStateWithLifecycle()
-                Scaffold(
-                    modifier = Modifier.fillMaxSize()
-                ) { innerPadding ->
-                    if (!isLoggedIn) {
-                        LoginScreen(
-                            viewModel = viewModel,
-                            modifier = Modifier.padding(innerPadding)
-                        )
-                    } else {
-                        MainScreen(
-                            viewModel = viewModel,
-                            modifier = Modifier.padding(innerPadding)
-                        )
+            val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
+            val appLanguage by viewModel.appLanguage.collectAsStateWithLifecycle()
+
+            val isDark = when (appTheme) {
+                "Dark" -> true
+                "Light" -> false
+                else -> isSystemInDarkTheme()
+            }
+
+            // Set Locale dynamically
+            LaunchedEffect(appLanguage) {
+                val locale = if (appLanguage == "Arabic") java.util.Locale("ar") else java.util.Locale("en")
+                java.util.Locale.setDefault(locale)
+                val config = android.content.res.Configuration(resources.configuration)
+                config.setLocale(locale)
+                @Suppress("DEPRECATION")
+                resources.updateConfiguration(config, resources.displayMetrics)
+            }
+
+            val layoutDirection = if (appLanguage == "Arabic") androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr
+
+            MyApplicationTheme(darkTheme = isDark) {
+                CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides layoutDirection) {
+                    val isLoggedIn by viewModel.isLoggedIn.collectAsStateWithLifecycle()
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize()
+                    ) { innerPadding ->
+                        if (!isLoggedIn) {
+                            LoginScreen(
+                                viewModel = viewModel,
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        } else {
+                            MainScreen(
+                                viewModel = viewModel,
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        }
                     }
                 }
             }
@@ -330,6 +366,7 @@ fun MainScreen(
     // Centralized Navigation Tab States for bottom rounded dock
     var adminTab by remember { mutableStateOf(0) }
     var supervisorTab by remember { mutableStateOf(0) }
+    var employeeTab by remember { mutableStateOf(0) }
 
     // Display messages from export or sync
     LaunchedEffect(exportResult) {
@@ -339,7 +376,12 @@ fun MainScreen(
         }
     }
 
-    val isDark = isSystemInDarkTheme()
+    val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
+    val isDark = when (appTheme) {
+        "Dark" -> true
+        "Light" -> false
+        else -> isSystemInDarkTheme()
+    }
     val appleBackgroundBrush = Brush.verticalGradient(
         colors = if (isDark) {
             listOf(Color(0xFF0F0F1A), Color(0xFF1E1F29), Color(0xFF121214))
@@ -529,7 +571,7 @@ fun MainScreen(
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
 
-            val todayRecord = attendanceRecords.filter { it.memberId == activeMember.id }.firstOrNull { it.date == "2026-06-30" }
+            val todayRecord = attendanceRecords.filter { it.memberId == activeMember.id }.firstOrNull { it.date == viewModel.getCurrentDateString() }
             RoleBasedActionsPanel(
                 role = activeMember.role,
                 viewModel = viewModel,
@@ -546,6 +588,7 @@ fun MainScreen(
                 "ADMIN" -> {
                     AdminView(
                         viewModel = viewModel,
+                        activeMember = activeMember,
                         members = members,
                         attendanceRecords = attendanceRecords,
                         syncLogs = syncLogs,
@@ -558,6 +601,7 @@ fun MainScreen(
                 "SUPERVISOR" -> {
                     SupervisorView(
                         viewModel = viewModel,
+                        activeMember = activeMember,
                         members = members,
                         attendanceRecords = attendanceRecords,
                         activeSubTab = supervisorTab,
@@ -568,7 +612,9 @@ fun MainScreen(
                     EmployeeView(
                         viewModel = viewModel,
                         activeMember = activeMember,
-                        attendanceRecords = attendanceRecords
+                        attendanceRecords = attendanceRecords,
+                        currentTab = employeeTab,
+                        onTabSelected = { employeeTab = it }
                     )
                 }
                 else -> {
@@ -595,22 +641,37 @@ fun MainScreen(
 
     // Floating rounded dock at the bottom of the screen!
     currentUser?.let { activeMember ->
-        if (activeMember.role == "ADMIN") {
-            GlassDock(
-                tabs = listOf("Dashboard", "Team", "Reports", "Backups", "Excel"),
-                selectedTab = adminTab,
-                onTabSelected = { adminTab = it },
-                icons = listOf(Icons.Default.Home, Icons.Default.Person, Icons.Default.List, Icons.Default.Refresh, Icons.Default.Share),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            )
-        } else if (activeMember.role == "SUPERVISOR") {
-            GlassDock(
-                tabs = listOf("Roster", "Reports"),
-                selectedTab = supervisorTab,
-                onTabSelected = { supervisorTab = it },
-                icons = listOf(Icons.Default.Check, Icons.Default.List),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            )
+        when (activeMember.role) {
+            "ADMIN" -> {
+                GlassDock(
+                    isDark = isDark,
+                    tabs = listOf("Dashboard", "Team", "Backups", "Excel", "Settings", "Inbox"),
+                    selectedTab = adminTab,
+                    onTabSelected = { adminTab = it },
+                    icons = listOf(Icons.Default.Home, Icons.Default.Person, Icons.Default.Refresh, Icons.Default.Share, Icons.Default.Settings, Icons.Default.MailOutline),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
+            "SUPERVISOR" -> {
+                GlassDock(
+                    isDark = isDark,
+                    tabs = listOf("Roster", "Settings"),
+                    selectedTab = supervisorTab,
+                    onTabSelected = { supervisorTab = it },
+                    icons = listOf(Icons.Default.Check, Icons.Default.Settings),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
+            "EMPLOYEE" -> {
+                GlassDock(
+                    isDark = isDark,
+                    tabs = listOf("Dashboard", "Contact Admin", "Settings"),
+                    selectedTab = employeeTab,
+                    onTabSelected = { employeeTab = it },
+                    icons = listOf(Icons.Default.Home, Icons.Default.MailOutline, Icons.Default.Settings),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
         }
     }
 }
@@ -618,7 +679,9 @@ fun MainScreen(
     // Add Member Dialog for Admin
     if (showAddMemberDialog) {
         var nameInput by remember { mutableStateOf("") }
+        var titleInput by remember { mutableStateOf("") }
         var emailInput by remember { mutableStateOf("") }
+        var requiresLocation by remember { mutableStateOf(false) }
         var roleSelection by remember { mutableStateOf("EMPLOYEE") }
 
         Dialog(onDismissRequest = { showAddMemberDialog = false }) {
@@ -654,13 +717,40 @@ fun MainScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     OutlinedTextField(
+                        value = titleInput,
+                        onValueChange = { titleInput = it },
+                        label = { Text("Job Title (Optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
                         value = emailInput,
                         onValueChange = { emailInput = it },
-                        label = { Text("Email Address") },
+                        label = { Text("Email Address (Optional)") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
                     )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = requiresLocation,
+                            onCheckedChange = { requiresLocation = it }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Require Location for Attendance",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -709,8 +799,8 @@ fun MainScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = {
-                                if (nameInput.isNotBlank() && emailInput.isNotBlank()) {
-                                    viewModel.addTeamMember(nameInput, roleSelection, emailInput)
+                                if (nameInput.isNotBlank()) {
+                                    viewModel.addTeamMember(nameInput, titleInput, roleSelection, emailInput, requiresLocation)
                                     showAddMemberDialog = false
                                 }
                             },
@@ -729,6 +819,7 @@ fun MainScreen(
 @Composable
 fun AdminView(
     viewModel: AttendanceViewModel,
+    activeMember: Member,
     members: List<Member>,
     attendanceRecords: List<Attendance>,
     syncLogs: List<SyncLog>,
@@ -743,11 +834,13 @@ fun AdminView(
     var newPasswordInput by remember { mutableStateOf("") }
     var generatedRecoveryCode by remember { mutableStateOf("") }
 
+    var editMember by remember { mutableStateOf<Member?>(null) }
+
     val linkedExcelFile by viewModel.linkedExcelFile.collectAsStateWithLifecycle()
     val excelLinkStatus by viewModel.excelLinkStatus.collectAsStateWithLifecycle()
     val excelImportResult by viewModel.excelImportResult.collectAsStateWithLifecycle()
 
-    val tabLabels = listOf("Overview Dashboard", "Team Directory", "Payroll & Reports", "Cloud Backups", "Excel Integration")
+    val tabLabels = listOf("Overview Dashboard", "Team Directory", "Cloud Backups", "Excel Integration", "Settings", "Inbox")
     val activeLabel = tabLabels.getOrElse(currentTab) { "" }
 
     Row(
@@ -782,20 +875,20 @@ fun AdminView(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "Admin Attendance Report:",
+                            text = "Admin Reports:",
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSecondaryContainer
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
-                                onClick = { viewModel.exportToExcel(context) },
+                                onClick = { viewModel.exportToPDF(context, overtimeOnly = true) },
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                 modifier = Modifier.height(36.dp)
                             ) {
-                                Icon(Icons.Default.Share, contentDescription = "Excel", modifier = Modifier.size(14.dp))
+                                Icon(Icons.Default.Star, contentDescription = "Overtime", modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Excel", fontSize = 11.sp)
+                                Text("OT", fontSize = 11.sp)
                             }
                             Button(
                                 onClick = { viewModel.exportToPDF(context) },
@@ -804,11 +897,15 @@ fun AdminView(
                             ) {
                                 Icon(Icons.Default.Share, contentDescription = "PDF", modifier = Modifier.size(14.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("PDF Report", fontSize = 11.sp)
+                                Text("Full PDF", fontSize = 11.sp)
                             }
                         }
                     }
                 }
+
+                // Overtime Chart
+                OvertimeDashboardWidget(members, attendanceRecords)
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // Key metrics row
                 Row(
@@ -823,7 +920,7 @@ fun AdminView(
                     )
                     MetricCard(
                         title = "Present Today",
-                        value = "${attendanceRecords.count { it.date == "2026-06-30" && it.isPresent }}",
+                        value = "${attendanceRecords.count { it.date == viewModel.getCurrentDateString() && it.isPresent }}",
                         icon = Icons.Default.Check,
                         modifier = Modifier.weight(1f)
                     )
@@ -859,7 +956,7 @@ fun AdminView(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                val pendingApprovals = attendanceRecords.filter { it.isPresent && it.approvedBySupervisorId == null }
+                val pendingApprovals = attendanceRecords.filter { it.isPresent && it.status == "PENDING" && it.approvedBySupervisorId == null }
                 if (pendingApprovals.isEmpty()) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -890,7 +987,7 @@ fun AdminView(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Column {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(text = empName, fontWeight = FontWeight.Bold)
                                     Text(
                                         text = "Date: ${record.date} | Overtime: ${record.overtimeHours} hrs",
@@ -898,11 +995,23 @@ fun AdminView(
                                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                     )
                                 }
-                                Button(
-                                    onClick = { viewModel.approveAttendanceRecord(record.id) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                                ) {
-                                    Text("Approve", fontSize = 12.sp)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(
+                                        onClick = { viewModel.rejectAttendanceRecord(record.id, "Manually rejected by administrator.") },
+                                        modifier = Modifier.height(36.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                    ) {
+                                        Text("Reject", fontSize = 11.sp)
+                                    }
+                                    Button(
+                                        onClick = { viewModel.approveAttendanceRecord(record.id) },
+                                        modifier = Modifier.height(36.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                    ) {
+                                        Text("Approve", fontSize = 11.sp)
+                                    }
                                 }
                             }
                         }
@@ -911,114 +1020,24 @@ fun AdminView(
             }
         }
         1 -> { // Team Directory Tab
-            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Team Members List",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Button(onClick = onAddMemberClick) {
-                        Icon(Icons.Default.Add, contentDescription = "Add")
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Add Member")
-                    }
+            TeamMembersDashboard(
+                members = members,
+                onAddMemberClick = onAddMemberClick,
+                onRemoveMemberClick = { viewModel.removeTeamMember(it) },
+                onResetPasswordClick = { member ->
+                    resetPasswordMember = member
+                    newPasswordInput = ""
+                    generatedRecoveryCode = (100000..999999).random().toString()
+                },
+                onEditMemberClick = { member ->
+                    editMember = member
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                members.forEach { member ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primaryContainer),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = member.name.take(1),
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Column {
-                                    Text(text = member.name, fontWeight = FontWeight.Bold)
-                                    Text(text = member.email, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                                }
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Badge(
-                                    containerColor = when (member.role) {
-                                        "ADMIN" -> MaterialTheme.colorScheme.primaryContainer
-                                        "SUPERVISOR" -> MaterialTheme.colorScheme.secondaryContainer
-                                        else -> MaterialTheme.colorScheme.tertiaryContainer
-                                    }
-                                ) {
-                                    Text(
-                                        text = member.role,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                if (member.role != "ADMIN") {
-                                    IconButton(
-                                        onClick = {
-                                            resetPasswordMember = member
-                                            newPasswordInput = ""
-                                            generatedRecoveryCode = (100000..999999).random().toString()
-                                        },
-                                        modifier = Modifier.testTag("reset_password_btn_${member.id}")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Lock,
-                                            contentDescription = "Reset Password",
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                }
-                                IconButton(
-                                    onClick = { viewModel.removeTeamMember(member) }
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Delete",
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            )
         }
-        2 -> { // Reports & Exports Tab
+        99 -> { // Reports & Exports Tab (Removed from dock)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 // Header & Intro Card
@@ -1217,6 +1236,20 @@ fun AdminView(
                             },
                             label = m.name
                         )
+                    }
+                }
+
+                // Individual Export Action
+                if (reportsFilterMemberId != null) {
+                    Button(
+                        onClick = { viewModel.exportToPDF(context, targetMemberId = reportsFilterMemberId) },
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+                    ) {
+                        Icon(Icons.Default.Share, "Export")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val name = members.find { it.id == reportsFilterMemberId }?.name ?: "Employee"
+                        Text("Export Attendance for $name")
                     }
                 }
 
@@ -1766,7 +1799,7 @@ fun AdminView(
                 }
             }
         }
-        3 -> { // Cloud Backup & Sync Log Tab
+        2 -> { // Cloud Backup & Sync Log Tab
             Column(modifier = Modifier.padding(horizontal = 16.dp)) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1802,6 +1835,57 @@ fun AdminView(
                                 Icon(Icons.Default.Refresh, contentDescription = "Sync")
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text("Trigger Manual Cloud Backup")
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                val importLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.GetContent(),
+                    onResult = { uri ->
+                        if (uri != null) {
+                            viewModel.importDatabase(context, uri)
+                        }
+                    }
+                )
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Local Database Backup & Restore",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Export the raw SQLite database for external use, or import an existing backup. App restart required after import.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { importLauncher.launch("*/*") },
+                                modifier = Modifier.weight(1f).testTag("import_db_button")
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "Import DB", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Import DB", fontSize = 12.sp)
+                            }
+                            Button(
+                                onClick = { viewModel.exportDatabase(context) },
+                                modifier = Modifier.weight(1f).testTag("export_db_button")
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = "Export DB", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Export DB", fontSize = 12.sp)
                             }
                         }
                     }
@@ -1868,7 +1952,7 @@ fun AdminView(
                 }
             }
         }
-        4 -> { // Excel Database Link Tab
+        3 -> { // Excel Database Link Tab
             Column(
                 modifier = Modifier
                     .padding(horizontal = 16.dp)
@@ -1989,9 +2073,9 @@ fun AdminView(
                             OutlinedButton(
                                 onClick = {
                                     csvDataInput = "Date,Employee Name,Role,Email,Status,Clock In,Clock Out,Overtime\n" +
-                                            "2026-06-30,Emily Davis,EMPLOYEE,emily.emp@work.com,PRESENT,08:15,18:15,1.5\n" +
-                                            "2026-06-30,Robert Johnson,SUPERVISOR,robert.sup@work.com,PRESENT,08:00,17:30,0.5\n" +
-                                            "2026-06-30,Michael Brown,EMPLOYEE,michael.emp@work.com,PRESENT,09:00,17:00,0.0"
+                                            "${viewModel.getCurrentDateString()},Emily Davis,EMPLOYEE,emily.emp@work.com,PRESENT,08:15,18:15,1.5\n" +
+                                            "${viewModel.getCurrentDateString()},Robert Johnson,SUPERVISOR,robert.sup@work.com,PRESENT,08:00,17:30,0.5\n" +
+                                            "${viewModel.getCurrentDateString()},Michael Brown,EMPLOYEE,michael.emp@work.com,PRESENT,09:00,17:00,0.0"
                                 },
                                 modifier = Modifier.weight(1f).testTag("load_sample_csv_button")
                             ) {
@@ -2064,6 +2148,13 @@ fun AdminView(
                     }
                 }
             }
+        }
+        4 -> { // Settings
+            SettingsView(activeMember = activeMember, viewModel = viewModel)
+        }
+        5 -> { // Inbox
+            val messages by viewModel.messages.collectAsStateWithLifecycle()
+            InboxView(messages = messages, onMarkAsRead = { viewModel.markMessageAsRead(it) })
         }
     }
 
@@ -2165,18 +2256,143 @@ fun AdminView(
             }
         )
     }
+
+    editMember?.let { targetMember ->
+        var editName by remember { mutableStateOf(targetMember.name) }
+        var editTitle by remember { mutableStateOf(targetMember.title) }
+        var editRole by remember { mutableStateOf(targetMember.role) }
+        var editEmail by remember { mutableStateOf(targetMember.email) }
+        var editRequiresLocation by remember { mutableStateOf(targetMember.requiresLocation) }
+
+        Dialog(onDismissRequest = { editMember = null }) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Edit Team Member",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    OutlinedTextField(
+                        value = editName,
+                        onValueChange = { editName = it },
+                        label = { Text("Full Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = editTitle,
+                        onValueChange = { editTitle = it },
+                        label = { Text("Job Title (Optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = editEmail,
+                        onValueChange = { editEmail = it },
+                        label = { Text("Email Address (Optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = editRequiresLocation,
+                            onCheckedChange = { editRequiresLocation = it }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Require Location for Attendance",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "Select Control Layer Role",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.align(Alignment.Start)
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        listOf("EMPLOYEE", "SUPERVISOR", "ADMIN").forEach { role ->
+                            FilterChip(
+                                selected = (editRole == role),
+                                onClick = { editRole = role },
+                                label = { Text(role, fontSize = 10.sp) }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = { editMember = null }) {
+                            Text("Cancel")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                if (editName.isNotBlank()) {
+                                    viewModel.editTeamMember(targetMember, editName, editTitle, editRole, editEmail, editRequiresLocation)
+                                    editMember = null
+                                }
+                            }
+                        ) {
+                            Text("Save Changes")
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ---------------------- SUPERVISOR VIEW ----------------------
 @Composable
 fun SupervisorView(
     viewModel: AttendanceViewModel,
+    activeMember: Member,
     members: List<Member>,
     attendanceRecords: List<Attendance>,
     activeSubTab: Int,
     onSubTabSelected: (Int) -> Unit
 ) {
-    val tabLabels = listOf("Record Daily Roster", "Review Final Reports")
+    val tabLabels = listOf("Record Daily Roster", "Settings")
     val activeLabel = tabLabels.getOrElse(activeSubTab) { "" }
 
     Row(
@@ -2196,204 +2412,462 @@ fun SupervisorView(
 
     Spacer(modifier = Modifier.height(16.dp))
 
-    if (activeSubTab == 0) {
-        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            Text(
-                text = "Daily Attendance Check",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = "Check the box for employee presence. Overtime hours can be tracked using the quick controls below.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
+    when (activeSubTab) {
+        0 -> {
+            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                Text(
+                    text = "Daily Attendance Check",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Check the box for employee presence. Overtime hours can be tracked using the quick controls below.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
 
-            val todayDate = "2026-06-30"
-            val employees = members.filter { it.role == "EMPLOYEE" }
-            employees.forEach { emp ->
-                val existingRecord = attendanceRecords.firstOrNull { it.memberId == emp.id && it.date == todayDate }
-                val isApproved = existingRecord?.approvedBySupervisorId != null
+                val todayDate = viewModel.getCurrentDateString()
+                val employees = members.filter { it.role == "EMPLOYEE" }
+                employees.forEach { emp ->
+                    val existingRecord = attendanceRecords.firstOrNull { it.memberId == emp.id && it.date == todayDate }
+                    val isApproved = existingRecord?.approvedBySupervisorId != null
 
-                var isPresent by remember(existingRecord) { mutableStateOf(existingRecord?.isPresent ?: true) }
-                var overtimeInput by remember(existingRecord) { mutableStateOf(existingRecord?.overtimeHours ?: 0.0) }
+                    var isPresent by remember(existingRecord) { mutableStateOf(existingRecord?.isPresent ?: true) }
+                    var overtimeInput by remember(existingRecord) { mutableStateOf(existingRecord?.overtimeHours ?: 0.0) }
 
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(text = emp.name, fontWeight = FontWeight.Bold)
-                                Text(text = emp.email, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(if (isPresent) "Present" else "Absent", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Checkbox(
-                                    checked = isPresent,
-                                    onCheckedChange = { isPresent = it },
-                                    enabled = !isApproved
-                                )
-                            }
-                        }
-
-                        if (isPresent) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "Overtime Hours:",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    OutlinedButton(
-                                        onClick = { if (overtimeInput > 0.0) overtimeInput -= 0.5 },
-                                        contentPadding = PaddingValues(0.dp),
-                                        modifier = Modifier.size(36.dp),
-                                        enabled = !isApproved
-                                    ) {
-                                        Text("-", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                                    }
-
-                                    Text(
-                                        text = "${overtimeInput}h",
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 12.dp)
-                                    )
-
-                                    OutlinedButton(
-                                        onClick = { if (overtimeInput < 12.0) overtimeInput += 0.5 },
-                                        contentPadding = PaddingValues(0.dp),
-                                        modifier = Modifier.size(36.dp),
-                                        enabled = !isApproved
-                                    ) {
-                                        Text("+", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        if (!isApproved) {
-                            Button(
-                                onClick = {
-                                    viewModel.supervisorSaveAttendance(emp.id, isPresent, overtimeInput)
-                                },
-                                modifier = Modifier.align(Alignment.End).testTag("confirm_record_btn_${emp.id}")
-                            ) {
-                                Text("Confirm & Record", fontSize = 12.sp)
-                            }
-                        } else {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Badge(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    modifier = Modifier.testTag("approved_badge_${emp.id}")
-                                ) {
-                                    Text(
-                                        text = "RECORDED & APPROVED ✓",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                Column {
+                                    Text(text = emp.name, fontWeight = FontWeight.Bold)
+                                    Text(text = emp.email, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(if (isPresent) "Present" else "Absent", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Checkbox(
+                                        checked = isPresent,
+                                        onCheckedChange = { isPresent = it },
+                                        enabled = !isApproved
                                     )
                                 }
-                                Text(
-                                    text = "Saved & Locked",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
+                            }
+
+                            if (isPresent) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Overtime Hours:",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        OutlinedButton(
+                                            onClick = { if (overtimeInput > 0.0) overtimeInput -= 0.5 },
+                                            contentPadding = PaddingValues(0.dp),
+                                            modifier = Modifier.size(36.dp),
+                                            enabled = !isApproved
+                                        ) {
+                                            Text("-", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                        }
+
+                                        Text(
+                                            text = "${overtimeInput}h",
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 12.dp)
+                                        )
+
+                                        OutlinedButton(
+                                            onClick = { if (overtimeInput < 12.0) overtimeInput += 0.5 },
+                                            contentPadding = PaddingValues(0.dp),
+                                            modifier = Modifier.size(36.dp),
+                                            enabled = !isApproved
+                                        ) {
+                                            Text("+", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            if (!isApproved) {
+                                Button(
+                                    onClick = {
+                                        viewModel.supervisorSaveAttendance(emp.id, isPresent, overtimeInput)
+                                    },
+                                    modifier = Modifier.align(Alignment.End).testTag("confirm_record_btn_${emp.id}")
+                                ) {
+                                    Text("Confirm & Record", fontSize = 12.sp)
+                                }
+                            } else {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        modifier = Modifier.testTag("approved_badge_${emp.id}")
+                                    ) {
+                                        Text(
+                                            text = "RECORDED & APPROVED ✓",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                    Text(
+                                        text = "Saved & Locked",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         }
-    } else {
-        // Review Reports
-        val context = LocalContext.current
-        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            Text(
-                text = "Submitted Attendance Reports",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
+        1 -> {
+            SettingsView(activeMember = activeMember, viewModel = viewModel)
+        }
+    }
+}
 
-            // Supervisor Export Reports Action Card
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+// ---------------------- EMPLOYEE VIEW ----------------------
+@Composable
+fun EmployeeView(
+    viewModel: AttendanceViewModel,
+    activeMember: Member,
+    attendanceRecords: List<Attendance>,
+    currentTab: Int,
+    onTabSelected: (Int) -> Unit
+) {
+    val personalRecords = attendanceRecords.filter { it.memberId == activeMember.id }
+    val todayRecord = personalRecords.firstOrNull { it.date == viewModel.getCurrentDateString() }
+    val notifications by viewModel.notifications.collectAsStateWithLifecycle()
+
+    LaunchedEffect(activeMember.id) {
+        viewModel.loadNotifications(activeMember.id)
+    }
+
+    var selectedOvertimeHours by remember { mutableStateOf(0.0) }
+    val context = LocalContext.current
+    val fusedLocationClient = remember { LocationServices.getFusedLocationProviderClient(context) }
+    var pendingAction by remember { mutableStateOf<String?>(null) }
+    var locationMessage by remember { mutableStateOf<String?>(null) }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true || permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true) {
+            fetchLocationAndClock(fusedLocationClient, pendingAction, viewModel, selectedOvertimeHours) { msg ->
+                locationMessage = msg
+            }
+        } else {
+            locationMessage = "Location permission denied"
+            // Still clock in/out without location if denied? Or block it?
+            // The user said "requires location", so ideally block or just pass "Denied". We'll pass "Denied".
+            if (pendingAction == "IN") viewModel.employeeClockIn("Denied")
+            else if (pendingAction == "OUT") viewModel.employeeClockOut(selectedOvertimeHours, "Denied")
+        }
+    }
+
+    when (currentTab) {
+        0 -> {
+            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                locationMessage?.let { msg ->
                     Text(
-                        text = "Generate & Export Team Reports",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "Export the team's historical check-in data in standard formats.",
+                        text = msg,
+                        color = MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(bottom = 12.dp)
+                        modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                }
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Button(
-                            onClick = { viewModel.exportToExcel(context) },
-                            modifier = Modifier.weight(1f).testTag("sup_export_excel_button"),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                        ) {
-                            Icon(Icons.Default.Share, contentDescription = "Excel", modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Excel Report", fontSize = 12.sp)
-                        }
+                        Text(
+                            text = "Daily Time Card",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = viewModel.getFullFormattedDate(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
 
-                        Button(
-                            onClick = { viewModel.exportToPDF(context) },
-                            modifier = Modifier.weight(1f).testTag("sup_export_pdf_button")
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        // Real-time Punch clock display
+                        Box(
+                            modifier = Modifier
+                                .size(110.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (todayRecord != null) {
+                                        if (todayRecord.punchOutTime != null) MaterialTheme.colorScheme.secondaryContainer
+                                        else MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    }
+                                ),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Default.Share, contentDescription = "PDF", modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("PDF Report", fontSize = 12.sp)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = if (todayRecord != null) Icons.Default.Check else Icons.Default.Lock,
+                                    contentDescription = "Clock Icon",
+                                    tint = if (todayRecord != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = if (todayRecord == null) {
+                                        "IDLE"
+                                    } else if (todayRecord.punchOutTime != null) {
+                                        "COMPLETED"
+                                    } else {
+                                        "ACTIVE"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (todayRecord != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                )
+                            }
                         }
                     }
                 }
-            }
 
-            attendanceRecords.forEach { record ->
-                val member = members.firstOrNull { it.id == record.memberId }
-                if (member != null) {
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Overtime Chart for current employee
+                OvertimeDashboardWidget(listOf(activeMember), personalRecords)
+                
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Overtime logger slider
+                if (todayRecord != null && todayRecord.punchOutTime == null) {
+                            Text(
+                                text = "Accumulated Overtime: ${String.format("%.1f", selectedOvertimeHours)} Hours",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Slider(
+                                value = selectedOvertimeHours.toFloat(),
+                                onValueChange = { selectedOvertimeHours = Math.round(it * 2) / 2.0 },
+                                valueRange = 0f..6f,
+                                steps = 11,
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+
+                        // Punch Buttons Row
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    val activity = context as? androidx.fragment.app.FragmentActivity
+                                    if (activity != null && BiometricHelper.isBiometricAvailable(context)) {
+                                        BiometricHelper.showBiometricPrompt(
+                                            activity = activity,
+                                            onSuccess = {
+                                                if (activeMember.requiresLocation) {
+                                                    pendingAction = "IN"
+                                                    val hasFine = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                                    val hasCoarse = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                                    if (hasFine || hasCoarse) {
+                                                        fetchLocationAndClock(fusedLocationClient, pendingAction, viewModel, selectedOvertimeHours) { msg ->
+                                                            locationMessage = msg
+                                                        }
+                                                    } else {
+                                                        locationPermissionLauncher.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION))
+                                                    }
+                                                } else {
+                                                    viewModel.employeeClockIn()
+                                                }
+                                            },
+                                            onError = { err ->
+                                                android.widget.Toast.makeText(context, "Authentication failed: $err", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        )
+                                    } else {
+                                        if (activeMember.requiresLocation) {
+                                            pendingAction = "IN"
+                                            val hasFine = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                            val hasCoarse = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                            if (hasFine || hasCoarse) {
+                                                fetchLocationAndClock(fusedLocationClient, pendingAction, viewModel, selectedOvertimeHours) { msg ->
+                                                    locationMessage = msg
+                                                }
+                                            } else {
+                                                locationPermissionLauncher.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION))
+                                            }
+                                        } else {
+                                            viewModel.employeeClockIn()
+                                        }
+                                    }
+                                },
+                                enabled = todayRecord == null,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("clock_in_button")
+                            ) {
+                                Text("Clock In")
+                            }
+
+                            Button(
+                                onClick = {
+                                    val activity = context as? androidx.fragment.app.FragmentActivity
+                                    if (activity != null && BiometricHelper.isBiometricAvailable(context)) {
+                                        BiometricHelper.showBiometricPrompt(
+                                            activity = activity,
+                                            onSuccess = {
+                                                if (activeMember.requiresLocation) {
+                                                    pendingAction = "OUT"
+                                                    val hasFine = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                                    val hasCoarse = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                                    if (hasFine || hasCoarse) {
+                                                        fetchLocationAndClock(fusedLocationClient, pendingAction, viewModel, selectedOvertimeHours) { msg ->
+                                                            locationMessage = msg
+                                                        }
+                                                    } else {
+                                                        locationPermissionLauncher.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION))
+                                                    }
+                                                } else {
+                                                    viewModel.employeeClockOut(selectedOvertimeHours)
+                                                }
+                                            },
+                                            onError = { err ->
+                                                android.widget.Toast.makeText(context, "Authentication failed: $err", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        )
+                                    } else {
+                                        if (activeMember.requiresLocation) {
+                                            pendingAction = "OUT"
+                                            val hasFine = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                            val hasCoarse = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                            if (hasFine || hasCoarse) {
+                                                fetchLocationAndClock(fusedLocationClient, pendingAction, viewModel, selectedOvertimeHours) { msg ->
+                                                    locationMessage = msg
+                                                }
+                                            } else {
+                                                locationPermissionLauncher.launch(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION))
+                                            }
+                                        } else {
+                                            viewModel.employeeClockOut(selectedOvertimeHours)
+                                        }
+                                    }
+                                },
+                                enabled = todayRecord != null && todayRecord.punchOutTime == null,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("clock_out_button"),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                            ) {
+                                Text("Clock Out")
+                            }
+                        }
+
+                        // Show punch-in and out stamps
+                        if (todayRecord != null) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceAround
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("PUNCH IN", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                                    Text(todayRecord.punchInTime ?: "--:--", fontWeight = FontWeight.Bold)
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("PUNCH OUT", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                                    Text(todayRecord.punchOutTime ?: "--:--", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Notifications Section
+                if (notifications.isNotEmpty()) {
+                    Text(
+                        text = "Recent Activity Alerts",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    notifications.take(5).forEach { notification ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (notification.isRead) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(text = notification.title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                    if (!notification.isRead) {
+                                        TextButton(onClick = { viewModel.markNotificationAsRead(notification.id) }) {
+                                            Text("Dismiss", fontSize = 10.sp)
+                                        }
+                                    }
+                                }
+                                Text(text = notification.message, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
+
+                // Personal History table
+                Text(
+                    text = "Your Personal Attendance Log",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                personalRecords.forEach { record ->
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 4.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                     ) {
                         Row(
@@ -2404,18 +2878,23 @@ fun SupervisorView(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
-                                Text(text = member.name, fontWeight = FontWeight.Bold)
+                                Text(text = "Date: ${record.date}", fontWeight = FontWeight.Bold)
                                 Text(
-                                    text = "Date: ${record.date} | Overtime: ${record.overtimeHours} hrs",
+                                    text = "In: ${record.punchInTime ?: "-"} | Out: ${record.punchOutTime ?: "-"} | Overtime: ${record.overtimeHours} hrs",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                 )
                             }
+
                             Badge(
-                                containerColor = if (record.isPresent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer
+                                containerColor = when(record.status) {
+                                    "APPROVED" -> MaterialTheme.colorScheme.primaryContainer
+                                    "REJECTED" -> MaterialTheme.colorScheme.errorContainer
+                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                }
                             ) {
                                 Text(
-                                    text = if (record.isPresent) "PRESENT" else "ABSENT",
+                                    text = record.status,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -2426,193 +2905,11 @@ fun SupervisorView(
                 }
             }
         }
-    }
-}
-
-// ---------------------- EMPLOYEE VIEW ----------------------
-@Composable
-fun EmployeeView(
-    viewModel: AttendanceViewModel,
-    activeMember: Member,
-    attendanceRecords: List<Attendance>
-) {
-    val personalRecords = attendanceRecords.filter { it.memberId == activeMember.id }
-    val todayRecord = personalRecords.firstOrNull { it.date == "2026-06-30" }
-
-    var selectedOvertimeHours by remember { mutableStateOf(0.0) }
-
-    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "Daily Time Card",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Tuesday, June 30, 2026",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Real-time Punch clock display
-                Box(
-                    modifier = Modifier
-                        .size(110.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (todayRecord != null) {
-                                if (todayRecord.punchOutTime != null) MaterialTheme.colorScheme.secondaryContainer
-                                else MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = if (todayRecord != null) Icons.Default.Check else Icons.Default.Lock,
-                            contentDescription = "Clock Icon",
-                            tint = if (todayRecord != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(32.dp)
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = if (todayRecord == null) {
-                                "PENDING"
-                            } else if (todayRecord.punchOutTime != null) {
-                                "CLOCKED OUT"
-                            } else {
-                                "CLOCKED IN"
-                            },
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Overtime logger slider
-                if (todayRecord != null && todayRecord.punchOutTime == null) {
-                    Text(
-                        text = "Accumulated Overtime: ${String.format("%.1f", selectedOvertimeHours)} Hours",
-                        fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Slider(
-                        value = selectedOvertimeHours.toFloat(),
-                        onValueChange = { selectedOvertimeHours = Math.round(it * 2) / 2.0 },
-                        valueRange = 0f..6f,
-                        steps = 11,
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                }
-
-                // Punch Buttons Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = { viewModel.employeeClockIn() },
-                        enabled = todayRecord == null,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("clock_in_button")
-                    ) {
-                        Text("Clock In")
-                    }
-
-                    Button(
-                        onClick = { viewModel.employeeClockOut(selectedOvertimeHours) },
-                        enabled = todayRecord != null && todayRecord.punchOutTime == null,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("clock_out_button"),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
-                    ) {
-                        Text("Clock Out")
-                    }
-                }
-
-                // Show punch-in and out stamps
-                if (todayRecord != null) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("PUNCH IN", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                            Text(todayRecord.punchInTime ?: "--:--", fontWeight = FontWeight.Bold)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("PUNCH OUT", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                            Text(todayRecord.punchOutTime ?: "--:--", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
+        1 -> { // Contact Admin
+            ContactAdminView(onSendMessage = { viewModel.sendMessageToAdmin(it) })
         }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Personal History table
-        Text(
-            text = "Your Personal Attendance Log",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-
-        personalRecords.forEach { record ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(text = "Date: ${record.date}", fontWeight = FontWeight.Bold)
-                        Text(
-                            text = "In: ${record.punchInTime ?: "-"} | Out: ${record.punchOutTime ?: "-"} | Overtime: ${record.overtimeHours} hrs",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        )
-                    }
-
-                    Badge(
-                        containerColor = if (record.approvedBySupervisorId != null) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer
-                    ) {
-                        Text(
-                            text = if (record.approvedBySupervisorId != null) "APPROVED" else "PENDING",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-            }
+        2 -> { // Settings
+            SettingsView(activeMember = activeMember, viewModel = viewModel)
         }
     }
 }
@@ -2773,7 +3070,12 @@ fun LoginScreen(
     var microsoftLoginStep by remember { mutableStateOf(0) } // 0: Input email, 1: Loading
     var microsoftLoginError by remember { mutableStateOf<String?>(null) }
 
-    val isDark = isSystemInDarkTheme()
+    val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
+    val isDark = when (appTheme) {
+        "Dark" -> true
+        "Light" -> false
+        else -> isSystemInDarkTheme()
+    }
     val appleBackgroundBrush = Brush.verticalGradient(
         colors = if (isDark) {
             listOf(Color(0xFF0F0F1A), Color(0xFF1E1F29), Color(0xFF121214))
@@ -2845,7 +3147,7 @@ fun LoginScreen(
                         value = username,
                         onValueChange = { username = it },
                         label = { Text("Username or Email") },
-                        placeholder = { Text("admin or user@work.com") },
+                        placeholder = { Text("Enter your email") },
                         leadingIcon = {
                             Icon(imageVector = Icons.Default.Person, contentDescription = "User Icon")
                         },
@@ -2922,7 +3224,9 @@ fun LoginScreen(
 
                     Button(
                         onClick = {
-                            viewModel.login(username, password)
+                            coroutineScope.launch {
+                                viewModel.login(username, password)
+                            }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2987,58 +3291,21 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Demo Quick Login Shortcuts
-            Text(
-                text = "Demo Accounts Quick Login",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.75f)
-            )
-
-            Column(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                // Admin Account Info & Quick Button
-                Card(
-                    onClick = {
-                        username = "admin"
-                        password = "C3a12345"
-                        viewModel.login("admin", "C3a12345")
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text("ADMIN role", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                            Text("User: admin | Pass: C3a12345", style = MaterialTheme.typography.bodyMedium)
-                        }
-                        Icon(imageVector = Icons.Default.ArrowForward, contentDescription = "Login")
-                    }
-                }
-
-                // Other roles (Seeded from DB dynamically)
+                // All roles (Seeded from DB dynamically)
                 members.forEach { member ->
-                    if (member.role != "ADMIN") {
-                        val currentPass = viewModel.getMemberPassword(member.id)
-                        Card(
-                            onClick = {
+                    val currentPass = viewModel.getMemberPassword(member.id)
+                    Card(
+                        onClick = {
+                            coroutineScope.launch {
                                 username = member.email
                                 password = currentPass
                                 viewModel.login(member.email, currentPass)
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                        ) {
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -3054,10 +3321,6 @@ fun LoginScreen(
                             }
                         }
                     }
-                }
-            }
-        }
-    }
 
     if (showMicrosoftLoginDialog) {
         AlertDialog(
@@ -3264,6 +3527,8 @@ fun LoginScreen(
             }
         )
     }
+            }
+        }
 }
 
 @Composable
@@ -3308,13 +3573,13 @@ fun MicrosoftLogo(modifier: Modifier = Modifier) {
 
 @Composable
 fun GlassDock(
+    isDark: Boolean,
     tabs: List<String>,
     selectedTab: Int,
     onTabSelected: (Int) -> Unit,
     icons: List<androidx.compose.ui.graphics.vector.ImageVector>,
     modifier: Modifier = Modifier
 ) {
-    val isDark = isSystemInDarkTheme()
     val bgColor = if (isDark) {
         Color(0xFF1E1E1E).copy(alpha = 0.75f)
     } else {
@@ -3351,11 +3616,17 @@ fun GlassDock(
                 } else {
                     Color.Transparent
                 }
-                val contentColor = if (selected) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                }
+                
+                val defaultColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                val activeColors = listOf(
+                    MaterialTheme.colorScheme.primary,
+                    Color(0xFF4CAF50), // Green for Team/Roster
+                    Color(0xFF2196F3), // Blue
+                    Color(0xFFFF9800), // Orange
+                    Color(0xFF9C27B0)  // Purple
+                )
+                val baseColor = activeColors.getOrElse(index % activeColors.size) { MaterialTheme.colorScheme.primary }
+                val contentColor = if (selected) baseColor else baseColor.copy(alpha = 0.6f)
 
                 Box(
                     modifier = Modifier

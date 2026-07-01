@@ -10,6 +10,7 @@ class AttendanceRepository(private val dao: AttendanceDao) {
     val allMembers: Flow<List<Member>> = dao.getAllMembers()
     val allAttendance: Flow<List<Attendance>> = dao.getAllAttendance()
     val allSyncLogs: Flow<List<SyncLog>> = dao.getAllSyncLogs()
+    val allMessages: Flow<List<InboxMessage>> = dao.getAllMessages()
 
     fun getAttendanceForDate(date: String): Flow<List<Attendance>> = dao.getAttendanceForDate(date)
     fun getAttendanceForMember(memberId: Long): Flow<List<Attendance>> = dao.getAttendanceForMember(memberId)
@@ -17,6 +18,8 @@ class AttendanceRepository(private val dao: AttendanceDao) {
     suspend fun insertMember(member: Member): Long = dao.insertMember(member)
     suspend fun deleteMember(member: Member) = dao.deleteMember(member)
     suspend fun getMemberById(id: Long): Member? = dao.getMemberById(id)
+    suspend fun getMemberCount(): Int = dao.getMemberCount()
+    suspend fun getMemberByEmailOrName(identifier: String): Member? = dao.getMemberByEmailOrName(identifier)
 
     suspend fun insertAttendance(attendance: Attendance): Long = dao.insertAttendance(attendance)
     suspend fun deleteAttendance(attendance: Attendance) = dao.deleteAttendance(attendance)
@@ -26,6 +29,8 @@ class AttendanceRepository(private val dao: AttendanceDao) {
         dao.getAttendanceForMemberAndDate(memberId, date)
 
     suspend fun approveAttendance(id: Long, supervisorId: Long) = dao.approveAttendance(id, supervisorId)
+    suspend fun rejectAttendance(id: Long, reason: String) = dao.rejectAttendance(id, reason)
+    suspend fun getAttendanceById(id: Long): Attendance? = dao.getAttendanceById(id)
 
     suspend fun performCloudSync(): SyncLog {
         val unsynced = dao.getUnsyncedAttendance()
@@ -63,4 +68,14 @@ class AttendanceRepository(private val dao: AttendanceDao) {
         dao.insertSyncLog(log)
         return log
     }
+
+    suspend fun insertMessage(message: InboxMessage): Long = dao.insertMessage(message)
+    suspend fun markMessageAsRead(id: Long) = dao.markMessageAsRead(id)
+
+    // Notifications
+    fun getNotificationsForMember(memberId: Long): Flow<List<AppNotification>> = dao.getNotificationsForMember(memberId)
+    suspend fun insertNotification(notification: AppNotification): Long = dao.insertNotification(notification)
+    suspend fun markNotificationAsRead(id: Long) = dao.markNotificationAsRead(id)
+
+    suspend fun updateMemberProfileImage(memberId: Long, imageUri: String) = dao.updateMemberProfileImage(memberId, imageUri)
 }
