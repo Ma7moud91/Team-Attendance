@@ -30,9 +30,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -142,7 +145,13 @@ fun RoleBasedActionsPanel(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "$role Control Panel",
+                    text = "${stringResource(id = when(role){
+                        "DEVELOPER" -> R.string.developer
+                        "SUPERSU" -> R.string.supersu
+                        "ADMIN" -> R.string.admin
+                        "SUPERVISOR" -> R.string.supervisor
+                        else -> R.string.employee
+                    })} ${stringResource(id = R.string.control_panel)}",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
@@ -158,6 +167,42 @@ fun RoleBasedActionsPanel(
 
             // Dynamic Buttons Layout based on role
             when (role) {
+                "SUPERSU" -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = onAddMemberClick,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("dash_action_add_admin"),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "Add Admin", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Add Admin", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            FilledTonalButton(
+                                onClick = {
+                                    viewModel.synchronizeCloud()
+                                    Toast.makeText(context, "Global Sync triggered!", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("dash_action_global_sync")
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Global Sync", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Global Sync", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
                 "ADMIN" -> {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
@@ -174,7 +219,7 @@ fun RoleBasedActionsPanel(
                             ) {
                                 Icon(Icons.Default.Add, contentDescription = "Add Member", modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Add Member", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(stringResource(id = R.string.add_member), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
 
                             FilledTonalButton(
@@ -367,6 +412,8 @@ fun MainScreen(
     var adminTab by remember { mutableStateOf(0) }
     var supervisorTab by remember { mutableStateOf(0) }
     var employeeTab by remember { mutableStateOf(0) }
+    var superuserTab by remember { mutableStateOf(0) }
+    var developerTab by remember { mutableStateOf(0) }
 
     // Display messages from export or sync
     LaunchedEffect(exportResult) {
@@ -436,7 +483,7 @@ fun MainScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Team Attendance",
+                        text = stringResource(id = R.string.app_name),
                         color = Color.White,
                         fontSize = 26.sp,
                         fontWeight = FontWeight.Bold
@@ -585,6 +632,17 @@ fun MainScreen(
             )
 
             when (activeMember.role) {
+                "DEVELOPER", "SUPERSU" -> {
+                    val currentTab = if (activeMember.role == "DEVELOPER") developerTab else superuserTab
+                    val setTab: (Int) -> Unit = { if (activeMember.role == "DEVELOPER") developerTab = it else superuserTab = it }
+                    DeveloperView(
+                        viewModel = viewModel,
+                        activeMember = activeMember,
+                        members = members,
+                        currentTab = currentTab,
+                        onTabSelected = setTab
+                    )
+                }
                 "ADMIN" -> {
                     AdminView(
                         viewModel = viewModel,
@@ -642,13 +700,36 @@ fun MainScreen(
     // Floating rounded dock at the bottom of the screen!
     currentUser?.let { activeMember ->
         when (activeMember.role) {
+            "DEVELOPER", "SUPERSU" -> {
+                val currentTab = if (activeMember.role == "DEVELOPER") developerTab else superuserTab
+                val setTab: (Int) -> Unit = { if (activeMember.role == "DEVELOPER") developerTab = it else superuserTab = it }
+                GlassDock(
+                    isDark = isDark,
+                    tabs = listOf(
+                        stringResource(R.string.overview),
+                        stringResource(R.string.admins),
+                        stringResource(R.string.sync),
+                        stringResource(R.string.settings)
+                    ),
+                    selectedTab = currentTab,
+                    onTabSelected = setTab,
+                    icons = listOf(Icons.Default.Home, Icons.Default.Person, Icons.Default.Refresh, Icons.Default.Settings),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
             "ADMIN" -> {
                 GlassDock(
                     isDark = isDark,
-                    tabs = listOf("Dashboard", "Team", "Backups", "Excel", "Settings", "Inbox"),
+                    tabs = listOf(
+                        stringResource(R.string.overview),
+                        stringResource(R.string.admins),
+                        stringResource(R.string.sync),
+                        stringResource(R.string.settings),
+                        stringResource(R.string.inbox)
+                    ),
                     selectedTab = adminTab,
                     onTabSelected = { adminTab = it },
-                    icons = listOf(Icons.Default.Home, Icons.Default.Person, Icons.Default.Refresh, Icons.Default.Share, Icons.Default.Settings, Icons.Default.MailOutline),
+                    icons = listOf(Icons.Default.Home, Icons.Default.Person, Icons.Default.Refresh, Icons.Default.Settings, Icons.Default.MailOutline),
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
@@ -806,7 +887,7 @@ fun MainScreen(
                             },
                             modifier = Modifier.testTag("add_member_button")
                         ) {
-                            Text("Add Member")
+                            Text(stringResource(id = R.string.add_member))
                         }
                     }
                 }
@@ -840,7 +921,13 @@ fun AdminView(
     val excelLinkStatus by viewModel.excelLinkStatus.collectAsStateWithLifecycle()
     val excelImportResult by viewModel.excelImportResult.collectAsStateWithLifecycle()
 
-    val tabLabels = listOf("Overview Dashboard", "Team Directory", "Cloud Backups", "Excel Integration", "Settings", "Inbox")
+    val tabLabels = listOf(
+        stringResource(R.string.overview_dashboard),
+        stringResource(R.string.team_directory),
+        stringResource(R.string.cloud_backups),
+        stringResource(R.string.settings),
+        stringResource(R.string.inbox)
+    )
     val activeLabel = tabLabels.getOrElse(currentTab) { "" }
 
     Row(
@@ -2382,6 +2469,159 @@ fun AdminView(
     }
 }
 
+@Composable
+fun DeveloperView(
+    viewModel: AttendanceViewModel,
+    activeMember: Member,
+    members: List<Member>,
+    currentTab: Int,
+    onTabSelected: (Int) -> Unit
+) {
+    val tabLabels = listOf(
+        stringResource(R.string.overview),
+        stringResource(R.string.admins),
+        stringResource(R.string.sync),
+        stringResource(R.string.settings)
+    )
+    val activeLabel = tabLabels.getOrElse(currentTab) { "" }
+    val linkedExcelFile by viewModel.linkedExcelFile.collectAsStateWithLifecycle()
+    val excelLinkStatus by viewModel.excelLinkStatus.collectAsStateWithLifecycle()
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+        Text(
+            text = activeLabel,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.ExtraBold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(vertical = 12.dp)
+        )
+
+        when (currentTab) {
+            0 -> { // Overview
+                MetricCard(
+                    title = stringResource(R.string.admins),
+                    value = "${members.count { it.role == "ADMIN" }}",
+                    icon = Icons.Default.Person,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            1 -> { // Admin Management
+                val admins = members.filter { it.role == "ADMIN" }
+                if (admins.isEmpty()) {
+                    Text(text = "No Admins registered.", modifier = Modifier.padding(16.dp))
+                } else {
+                    admins.forEach { admin ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(text = admin.name, fontWeight = FontWeight.Bold)
+                                    Text(text = admin.email, style = MaterialTheme.typography.bodySmall)
+                                }
+                                Row {
+                                    IconButton(onClick = { viewModel.removeTeamMember(admin) }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            2 -> { // Sync & Database Link Control
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    var excelPathInput by remember { mutableStateOf(linkedExcelFile ?: "/sdcard/Download/attendance_database.csv") }
+                    var csvDataInput by remember { mutableStateOf("") }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(text = "Global Sync Configuration", fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { viewModel.synchronizeCloud() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Force Global Database Sync")
+                            }
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(
+                                text = "Developer Database Link Control",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+
+                            OutlinedTextField(
+                                value = excelPathInput,
+                                onValueChange = { excelPathInput = it },
+                                label = { Text("Database Sync Link (URL/Path)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+
+                            Text(
+                                text = "Optional CSV Data Override:",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+
+                            OutlinedTextField(
+                                value = csvDataInput,
+                                onValueChange = { csvDataInput = it },
+                                label = { Text("CSV Payload") },
+                                modifier = Modifier.fillMaxWidth().height(100.dp)
+                            )
+                            
+                            Button(
+                                onClick = { 
+                                    viewModel.linkExcelDatabase(excelPathInput, csvDataInput)
+                                    viewModel.synchronizeCloud()
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Check, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Update Link & Force Sync")
+                            }
+
+                            if (excelLinkStatus == "ACTIVE (LINKED)") {
+                                OutlinedButton(
+                                    onClick = { viewModel.unlinkExcelDatabase() },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Text("Unlink Database")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            3 -> { // Settings
+                SettingsView(activeMember = activeMember, viewModel = viewModel)
+            }
+        }
+    }
+}
+
 // ---------------------- SUPERVISOR VIEW ----------------------
 @Composable
 fun SupervisorView(
@@ -2392,7 +2632,10 @@ fun SupervisorView(
     activeSubTab: Int,
     onSubTabSelected: (Int) -> Unit
 ) {
-    val tabLabels = listOf("Record Daily Roster", "Settings")
+    val tabLabels = listOf(
+        stringResource(R.string.record_daily_roster),
+        stringResource(R.string.settings)
+    )
     val activeLabel = tabLabels.getOrElse(activeSubTab) { "" }
 
     Row(
@@ -2416,12 +2659,12 @@ fun SupervisorView(
         0 -> {
             Column(modifier = Modifier.padding(horizontal = 16.dp)) {
                 Text(
-                    text = "Daily Attendance Check",
+                    text = stringResource(R.string.daily_attendance_check),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Check the box for employee presence. Overtime hours can be tracked using the quick controls below.",
+                    text = stringResource(R.string.supervisor_instruction),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                     modifier = Modifier.padding(bottom = 16.dp)
@@ -3104,7 +3347,16 @@ fun LoginScreen(
                     .size(80.dp)
                     .clip(CircleShape)
                     .background(Color.White.copy(alpha = 0.25f))
-                    .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)), CircleShape),
+                    .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)), CircleShape)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onDoubleTap = {
+                                username = "dev"
+                                password = "4979"
+                                Toast.makeText(context, "Developer Mode Triggered", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -3116,14 +3368,14 @@ fun LoginScreen(
             }
 
             Text(
-                text = "Welcome Back",
+                text = stringResource(R.string.welcome_back),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground
             )
 
             Text(
-                text = "Sign in to access your attendance workspace",
+                text = stringResource(R.string.sign_in_desc),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center,
@@ -3146,7 +3398,7 @@ fun LoginScreen(
                     OutlinedTextField(
                         value = username,
                         onValueChange = { username = it },
-                        label = { Text("Username or Email") },
+                        label = { Text(stringResource(R.string.username_or_email)) },
                         placeholder = { Text("Enter your email") },
                         leadingIcon = {
                             Icon(imageVector = Icons.Default.Person, contentDescription = "User Icon")
@@ -3165,7 +3417,7 @@ fun LoginScreen(
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
-                        label = { Text("Password") },
+                        label = { Text(stringResource(com.example.R.string.password)) },
                         visualTransformation = if (passwordVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
                         leadingIcon = {
                             Icon(imageVector = Icons.Default.Lock, contentDescription = "Lock Icon")

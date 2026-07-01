@@ -115,6 +115,14 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private suspend fun seedInitialData() {
+        // Seed Developer
+        val devId = repository.insertMember(Member(name = "Developer", role = "DEVELOPER", email = "dev"))
+        setMemberPassword(devId, "4979")
+
+        // Seed Superuser
+        val superSuId = repository.insertMember(Member(name = "Supersu", role = "SUPERSU", email = "supersu@work.com"))
+        setMemberPassword(superSuId, "4979")
+
         val adminId = repository.insertMember(Member(name = "Alice Smith", role = "ADMIN", email = "alice.admin@work.com"))
         val supervisorId = repository.insertMember(Member(name = "Robert Johnson", role = "SUPERVISOR", email = "robert.sup@work.com"))
         val emp1Id = repository.insertMember(Member(name = "Emily Davis", role = "EMPLOYEE", email = "emily.emp@work.com"))

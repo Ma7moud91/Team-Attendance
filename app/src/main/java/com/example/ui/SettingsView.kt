@@ -157,11 +157,11 @@ fun SettingsView(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("App Info", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Text(stringResource(R.string.app_info), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Version: 1.1.0 (Localization Support)", style = MaterialTheme.typography.bodyMedium)
-                Text("Build: 2026-07-01", style = MaterialTheme.typography.bodyMedium)
-                Text("Developer: AI Studio", style = MaterialTheme.typography.bodyMedium)
+                Text("${stringResource(R.string.version)}: 1.1.0 (Localization Support)", style = MaterialTheme.typography.bodyMedium)
+                Text("${stringResource(R.string.build)}: 2026-07-01", style = MaterialTheme.typography.bodyMedium)
+                Text("${stringResource(R.string.developer)}: AI Studio", style = MaterialTheme.typography.bodyMedium)
             }
         }
     }
@@ -175,7 +175,7 @@ fun SettingsView(
                     OutlinedTextField(
                         value = newPassword,
                         onValueChange = { newPassword = it },
-                        label = { Text("New Password") },
+                        label = { Text(stringResource(R.string.new_password)) },
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -183,7 +183,7 @@ fun SettingsView(
                     OutlinedTextField(
                         value = confirmPassword,
                         onValueChange = { confirmPassword = it },
-                        label = { Text("Confirm Password") },
+                        label = { Text(stringResource(R.string.confirm_password)) },
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -199,12 +199,12 @@ fun SettingsView(
                         Toast.makeText(context, "Passwords do not match!", Toast.LENGTH_SHORT).show()
                     }
                 }) {
-                    Text("Update")
+                    Text(stringResource(R.string.update))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showPasswordDialog = false }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.cancel))
                 }
             }
         )
