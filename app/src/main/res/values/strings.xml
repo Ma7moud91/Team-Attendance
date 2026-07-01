@@ -47,4 +47,15 @@
     <string name="developer">Developer</string>
     <string name="update">Update</string>
     <string name="cancel">Cancel</string>
+    <string name="developer_access">Developer Access</string>
+    <string name="developer_passcode_title">Enter Developer Passcode</string>
+    <string name="developer_passcode_desc">A secure verification is required to open the developer console. Lockout applies after 5 failed attempts.</string>
+    <string name="passcode">Passcode</string>
+    <string name="incorrect_passcode">Incorrect passcode. Please try again.</string>
+    <string name="lockout_message">Too many failed attempts. Try again in %d seconds.</string>
+    <string name="username">Username</string>
+    <string name="invalid_developer_credentials">Invalid developer credentials.</string>
+    <string name="biometric_auth">Biometric Authentication</string>
+    <string name="biometric_desc">Enable fingerprint or face unlock for faster sign-in.</string>
+    <string name="login_as_biometric">Login as %1$s (Biometric)</string>
 </resources>

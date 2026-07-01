@@ -75,7 +75,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private val _appTheme = MutableStateFlow("System Default")
     val appTheme: StateFlow<String> = _appTheme.asStateFlow()
 
-    private val _appLanguage = MutableStateFlow("English")
+    private val _appLanguage = MutableStateFlow("Arabic")
     val appLanguage: StateFlow<String> = _appLanguage.asStateFlow()
 
     private val _notifications = MutableStateFlow<List<AppNotification>>(emptyList())
@@ -87,6 +87,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
     fun updateLanguage(language: String) {
         _appLanguage.value = language
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
+        sharedPrefs.edit().putString("app_language", language).apply()
     }
 
     private val _isOfflineMode = MutableStateFlow(false)
@@ -174,6 +176,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
             // Session Management: load last session
             val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
+            _appLanguage.value = sharedPrefs.getString("app_language", "Arabic") ?: "Arabic"
             _isBiometricPreferred.value = sharedPrefs.getBoolean("biometric_preferred", true)
             val lastUserId = sharedPrefs.getLong("logged_in_user_id", -1L)
             if (lastUserId != -1L) {

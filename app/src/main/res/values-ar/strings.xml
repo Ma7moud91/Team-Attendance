@@ -47,4 +47,15 @@
     <string name="developer">المطور</string>
     <string name="update">تحديث</string>
     <string name="cancel">إلغاء</string>
+    <string name="developer_access">دخول المطور</string>
+    <string name="developer_passcode_title">أدخل رمز مرور المطور</string>
+    <string name="developer_passcode_desc">مطلوب التحقق الآمن لفتح وحدة تحكم المطور. يتم القفل بعد 5 محاولات فاشلة.</string>
+    <string name="passcode">رمز المرور</string>
+    <string name="incorrect_passcode">رمز المرور غير صحيح. يرجى المحاولة مرة أخرى.</string>
+    <string name="lockout_message">محاولات فاشلة كثيرة جداً. حاول مرة أخرى خلال %d ثانية.</string>
+    <string name="username">اسم المستخدم</string>
+    <string name="invalid_developer_credentials">بيانات اعتماد المطور غير صالحة.</string>
+    <string name="biometric_auth">المصادقة البيومترية</string>
+    <string name="biometric_desc">تمكين بصمة الإصبع أو فتح الوجه لتسجيل دخول أسرع.</string>
+    <string name="login_as_biometric">تسجيل الدخول باسم %1$s (بيومتري)</string>
 </resources>

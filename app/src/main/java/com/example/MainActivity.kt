@@ -3635,6 +3635,9 @@ fun LoginScreen(
     var microsoftLoginStep by remember { mutableStateOf(0) } // 0: Input email, 1: Loading
     var microsoftLoginError by remember { mutableStateOf<String?>(null) }
 
+    var showDevPasscodeDialog by remember { mutableStateOf(false) }
+    var showDevLoginScreen by remember { mutableStateOf(false) }
+
     val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
     val isDark = when (appTheme) {
         "Dark" -> true
@@ -3649,13 +3652,177 @@ fun LoginScreen(
         }
     )
 
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(appleBackgroundBrush)
-            .padding(16.dp),
-        contentAlignment = Alignment.Center
-    ) {
+    if (showDevLoginScreen) {
+        // Developer Login Screen Composable
+        var devUserVal by remember { mutableStateOf("") }
+        var devPasswordVal by remember { mutableStateOf("") }
+        var devPassVisible by remember { mutableStateOf(false) }
+        var devErrorText by remember { mutableStateOf<String?>(null) }
+
+        LaunchedEffect(Unit) {
+            // Verify authorization again when Developer screen loads
+            if (!com.example.ui.DeveloperAuthService.isDeveloperAuthorized(context)) {
+                showDevLoginScreen = false
+                Toast.makeText(context, "Unauthorized. Session expired.", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(appleBackgroundBrush)
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Developer Logo / Icon
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
+                        .border(BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Build,
+                        contentDescription = "Developer Logo",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+
+                Text(
+                    text = stringResource(R.string.developer_access),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+
+                Text(
+                    text = "Authenticate with Developer System Credentials",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                GlassCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    containerAlpha = 0.35f,
+                    borderAlpha = 0.3f
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = devUserVal,
+                            onValueChange = { 
+                                devUserVal = it
+                                devErrorText = null
+                            },
+                            label = { Text(stringResource(R.string.username)) },
+                            placeholder = { Text("e.g., dev") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("dev_username_input")
+                        )
+
+                        OutlinedTextField(
+                            value = devPasswordVal,
+                            onValueChange = { 
+                                devPasswordVal = it
+                                devErrorText = null
+                            },
+                            label = { Text(stringResource(R.string.password)) },
+                            singleLine = true,
+                            visualTransformation = if (devPassVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { devPassVisible = !devPassVisible }) {
+                                    Icon(
+                                        imageVector = if (devPassVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                        contentDescription = "Toggle password visibility"
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("dev_password_input")
+                        )
+
+                        if (devErrorText != null) {
+                            Text(
+                                text = devErrorText ?: "",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    try {
+                                        // Verify authorization again on login click
+                                        if (!com.example.ui.DeveloperAuthService.isDeveloperAuthorized(context)) {
+                                            showDevLoginScreen = false
+                                            Toast.makeText(context, "Unauthorized. Session expired.", Toast.LENGTH_SHORT).show()
+                                            return@launch
+                                        }
+
+                                        val success = viewModel.login(devUserVal, devPasswordVal)
+                                        if (success) {
+                                            Toast.makeText(context, "Developer authenticated successfully", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            devErrorText = context.getString(R.string.invalid_developer_credentials)
+                                        }
+                                    } catch (e: Exception) {
+                                        devErrorText = e.message ?: "Authentication failed"
+                                    }
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("dev_login_button")
+                        ) {
+                            Text("Login")
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                showDevLoginScreen = false
+                                devUserVal = ""
+                                devPasswordVal = ""
+                                devErrorText = null
+                                com.example.ui.DeveloperAuthService.setDeveloperAuthorized(context, false)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("dev_cancel_button")
+                        ) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(appleBackgroundBrush)
+                .padding(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -3671,11 +3838,21 @@ fun LoginScreen(
                     .background(Color.White.copy(alpha = 0.25f))
                     .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)), CircleShape)
                     .pointerInput(Unit) {
+                        // Hidden Access Trigger: Detect a double-tap within DEV_DOUBLE_TAP_MS (500ms)
+                        // Single-click remains completely unchanged (unhandled, behaves normally)
                         detectTapGestures(
                             onDoubleTap = {
-                                username = "dev"
-                                password = "4979"
-                                Toast.makeText(context, "Developer Mode Triggered", Toast.LENGTH_SHORT).show()
+                                try {
+                                    val remainingLockout = com.example.ui.DeveloperAuthService.getRemainingLockoutTime(context)
+                                    if (remainingLockout > 0) {
+                                        val remainingSecs = (remainingLockout + 999) / 1000
+                                        Toast.makeText(context, context.getString(R.string.lockout_message, remainingSecs.toInt()), Toast.LENGTH_LONG).show()
+                                    } else {
+                                        showDevPasscodeDialog = true
+                                    }
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                }
                             }
                         )
                     },
@@ -4146,8 +4323,97 @@ fun LoginScreen(
             }
         )
     }
+
+    var devPasscodeInput by remember { mutableStateOf("") }
+    var devPasscodeError by remember { mutableStateOf<String?>(null) }
+
+    if (showDevPasscodeDialog) {
+        AlertDialog(
+            onDismissRequest = { 
+                showDevPasscodeDialog = false
+                devPasscodeInput = ""
+                devPasscodeError = null
+            },
+            title = {
+                Text(
+                    text = stringResource(R.string.developer_passcode_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.developer_passcode_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = devPasscodeInput,
+                        onValueChange = { 
+                            devPasscodeInput = it
+                            devPasscodeError = null
+                        },
+                        label = { Text(stringResource(R.string.passcode)) },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword
+                        ),
+                        modifier = Modifier.fillMaxWidth().testTag("dev_passcode_input")
+                    )
+                    if (devPasscodeError != null) {
+                        Text(
+                            text = devPasscodeError ?: "",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        try {
+                            val isVerified = com.example.ui.DeveloperAuthService.verifyPasscode(context, devPasscodeInput) { status, msg ->
+                                viewModel.logAdminAction("DEV_ACCESS_$status", "Developer", msg)
+                            }
+                            if (isVerified) {
+                                com.example.ui.DeveloperAuthService.setDeveloperAuthorized(context, true)
+                                showDevPasscodeDialog = false
+                                devPasscodeInput = ""
+                                devPasscodeError = null
+                                showDevLoginScreen = true
+                            } else {
+                                devPasscodeError = context.getString(R.string.incorrect_passcode)
+                            }
+                        } catch (e: Exception) {
+                            devPasscodeError = e.message ?: "Authentication error"
+                        }
+                    },
+                    modifier = Modifier.testTag("dev_passcode_verify_button")
+                ) {
+                    Text("Verify")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showDevPasscodeDialog = false
+                        devPasscodeInput = ""
+                        devPasscodeError = null
+                    },
+                    modifier = Modifier.testTag("dev_passcode_cancel_button")
+                ) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
             }
         }
+    }
 }
 
 @Composable
