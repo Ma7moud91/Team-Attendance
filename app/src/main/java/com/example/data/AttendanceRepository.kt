@@ -11,6 +11,8 @@ class AttendanceRepository(private val dao: AttendanceDao) {
     val allAttendance: Flow<List<Attendance>> = dao.getAllAttendance()
     val allSyncLogs: Flow<List<SyncLog>> = dao.getAllSyncLogs()
     val allMessages: Flow<List<InboxMessage>> = dao.getAllMessages()
+    val allAssignmentHistory: Flow<List<SupervisorAssignmentHistory>> = dao.getAllAssignmentHistory()
+    val allAuditLogs: Flow<List<AuditLog>> = dao.getAllAuditLogs()
 
     fun getAttendanceForDate(date: String): Flow<List<Attendance>> = dao.getAttendanceForDate(date)
     fun getAttendanceForMember(memberId: Long): Flow<List<Attendance>> = dao.getAttendanceForMember(memberId)
@@ -70,6 +72,7 @@ class AttendanceRepository(private val dao: AttendanceDao) {
     }
 
     suspend fun insertMessage(message: InboxMessage): Long = dao.insertMessage(message)
+    suspend fun insertSyncLog(log: SyncLog): Long = dao.insertSyncLog(log)
     suspend fun markMessageAsRead(id: Long) = dao.markMessageAsRead(id)
 
     // Notifications
@@ -78,4 +81,7 @@ class AttendanceRepository(private val dao: AttendanceDao) {
     suspend fun markNotificationAsRead(id: Long) = dao.markNotificationAsRead(id)
 
     suspend fun updateMemberProfileImage(memberId: Long, imageUri: String) = dao.updateMemberProfileImage(memberId, imageUri)
+
+    suspend fun insertAssignmentHistory(history: SupervisorAssignmentHistory): Long = dao.insertAssignmentHistory(history)
+    suspend fun insertAuditLog(log: AuditLog): Long = dao.insertAuditLog(log)
 }

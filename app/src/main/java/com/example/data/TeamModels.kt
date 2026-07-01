@@ -12,7 +12,35 @@ data class Member(
     val email: String,
     val requiresLocation: Boolean = false,
     val profileImage: String? = null,
-    val isActive: Boolean = true
+    val isActive: Boolean = true,
+    val supervisorId: Long? = null
+)
+
+@Entity(tableName = "supervisor_assignment_history")
+data class SupervisorAssignmentHistory(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val employeeId: Long,
+    val employeeName: String,
+    val previousSupervisorId: Long?,
+    val previousSupervisorName: String?,
+    val newSupervisorId: Long?,
+    val newSupervisorName: String?,
+    val assignedByAdminId: Long,
+    val assignedByAdminName: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "audit_logs")
+data class AuditLog(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val userId: Long,
+    val username: String,
+    val userRole: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val actionType: String, // "SUPERVISOR_ASSIGNMENT", "REPORT_GENERATION", "REPORT_EXPORT"
+    val details: String,
+    val reportType: String? = null, // "FULL_ATTENDANCE", "SINGLE_EMPLOYEE"
+    val exportFormat: String? = null // "XLSX", "PDF"
 )
 
 @Entity(tableName = "attendance")

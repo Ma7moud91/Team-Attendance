@@ -97,4 +97,18 @@ interface AttendanceDao {
 
     @Query("UPDATE members SET profileImage = :imageUri WHERE id = :memberId")
     suspend fun updateMemberProfileImage(memberId: Long, imageUri: String)
+
+    // Supervisor Assignment History Queries
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAssignmentHistory(history: SupervisorAssignmentHistory): Long
+
+    @Query("SELECT * FROM supervisor_assignment_history ORDER BY timestamp DESC")
+    fun getAllAssignmentHistory(): Flow<List<SupervisorAssignmentHistory>>
+
+    // Audit Log Queries
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAuditLog(log: AuditLog): Long
+
+    @Query("SELECT * FROM audit_logs ORDER BY timestamp DESC")
+    fun getAllAuditLogs(): Flow<List<AuditLog>>
 }

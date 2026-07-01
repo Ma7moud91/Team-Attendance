@@ -48,6 +48,7 @@ import com.example.data.Attendance
 import com.example.data.Member
 import com.example.data.SyncLog
 import com.example.ui.AttendanceViewModel
+import com.example.ui.ReportsDashboard
 import com.example.ui.TeamMembersDashboard
 import com.example.ui.SettingsView
 import com.example.ui.InboxView
@@ -700,9 +701,23 @@ fun MainScreen(
     // Floating rounded dock at the bottom of the screen!
     currentUser?.let { activeMember ->
         when (activeMember.role) {
-            "DEVELOPER", "SUPERSU" -> {
-                val currentTab = if (activeMember.role == "DEVELOPER") developerTab else superuserTab
-                val setTab: (Int) -> Unit = { if (activeMember.role == "DEVELOPER") developerTab = it else superuserTab = it }
+            "DEVELOPER" -> {
+                GlassDock(
+                    isDark = isDark,
+                    tabs = listOf(
+                        stringResource(R.string.overview),
+                        stringResource(R.string.admins),
+                        stringResource(R.string.sync),
+                        "Activity Logs",
+                        stringResource(R.string.settings)
+                    ),
+                    selectedTab = developerTab,
+                    onTabSelected = { developerTab = it },
+                    icons = listOf(Icons.Default.Home, Icons.Default.Person, Icons.Default.Refresh, Icons.Default.List, Icons.Default.Settings),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
+            "SUPERSU" -> {
                 GlassDock(
                     isDark = isDark,
                     tabs = listOf(
@@ -711,8 +726,8 @@ fun MainScreen(
                         stringResource(R.string.sync),
                         stringResource(R.string.settings)
                     ),
-                    selectedTab = currentTab,
-                    onTabSelected = setTab,
+                    selectedTab = superuserTab,
+                    onTabSelected = { superuserTab = it },
                     icons = listOf(Icons.Default.Home, Icons.Default.Person, Icons.Default.Refresh, Icons.Default.Settings),
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
@@ -725,21 +740,22 @@ fun MainScreen(
                         stringResource(R.string.admins),
                         stringResource(R.string.sync),
                         stringResource(R.string.settings),
-                        stringResource(R.string.inbox)
+                        stringResource(R.string.inbox),
+                        "Reports"
                     ),
                     selectedTab = adminTab,
                     onTabSelected = { adminTab = it },
-                    icons = listOf(Icons.Default.Home, Icons.Default.Person, Icons.Default.Refresh, Icons.Default.Settings, Icons.Default.MailOutline),
+                    icons = listOf(Icons.Default.Home, Icons.Default.Person, Icons.Default.Refresh, Icons.Default.Settings, Icons.Default.MailOutline, Icons.Default.Assessment),
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
             "SUPERVISOR" -> {
                 GlassDock(
                     isDark = isDark,
-                    tabs = listOf("Roster", "Settings"),
+                    tabs = listOf("Roster", "Settings", "Reports"),
                     selectedTab = supervisorTab,
                     onTabSelected = { supervisorTab = it },
-                    icons = listOf(Icons.Default.Check, Icons.Default.Settings),
+                    icons = listOf(Icons.Default.Check, Icons.Default.Settings, Icons.Default.Assessment),
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
@@ -848,7 +864,12 @@ fun MainScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf("EMPLOYEE", "SUPERVISOR", "ADMIN").forEach { r ->
+                        val availableRoles = if (currentUser?.role == "DEVELOPER" || currentUser?.role == "SUPERSU") {
+                            listOf("EMPLOYEE", "SUPERVISOR", "ADMIN")
+                        } else {
+                            listOf("EMPLOYEE", "SUPERVISOR")
+                        }
+                        availableRoles.forEach { r ->
                             val isSel = roleSelection == r
                             OutlinedButton(
                                 onClick = { roleSelection = r },
@@ -916,6 +937,7 @@ fun AdminView(
     var generatedRecoveryCode by remember { mutableStateOf("") }
 
     var editMember by remember { mutableStateOf<Member?>(null) }
+    var assignSupervisorEmployee by remember { mutableStateOf<Member?>(null) }
 
     val linkedExcelFile by viewModel.linkedExcelFile.collectAsStateWithLifecycle()
     val excelLinkStatus by viewModel.excelLinkStatus.collectAsStateWithLifecycle()
@@ -926,7 +948,8 @@ fun AdminView(
         stringResource(R.string.team_directory),
         stringResource(R.string.cloud_backups),
         stringResource(R.string.settings),
-        stringResource(R.string.inbox)
+        stringResource(R.string.inbox),
+        "Reports"
     )
     val activeLabel = tabLabels.getOrElse(currentTab) { "" }
 
@@ -969,7 +992,7 @@ fun AdminView(
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
-                                onClick = { viewModel.exportToPDF(context, overtimeOnly = true) },
+                                onClick = { viewModel.exportToPDF(context) },
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                 modifier = Modifier.height(36.dp)
                             ) {
@@ -1108,7 +1131,7 @@ fun AdminView(
         }
         1 -> { // Team Directory Tab
             TeamMembersDashboard(
-                members = members,
+                members = members.filter { it.role != "ADMIN" && it.role != "DEVELOPER" && it.role != "SUPERSU" },
                 onAddMemberClick = onAddMemberClick,
                 onRemoveMemberClick = { viewModel.removeTeamMember(it) },
                 onResetPasswordClick = { member ->
@@ -1118,6 +1141,11 @@ fun AdminView(
                 },
                 onEditMemberClick = { member ->
                     editMember = member
+                },
+                activeMemberRole = activeMember.role,
+                supervisors = members.filter { it.role == "SUPERVISOR" },
+                onAssignSupervisorClick = { employee ->
+                    assignSupervisorEmployee = employee
                 }
             )
         }
@@ -1329,7 +1357,7 @@ fun AdminView(
                 // Individual Export Action
                 if (reportsFilterMemberId != null) {
                     Button(
-                        onClick = { viewModel.exportToPDF(context, targetMemberId = reportsFilterMemberId) },
+                        onClick = { viewModel.exportToPDF(context, employeeId = reportsFilterMemberId) },
                         modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
                     ) {
@@ -2039,210 +2067,104 @@ fun AdminView(
                 }
             }
         }
-        3 -> { // Excel Database Link Tab
-            Column(
-                modifier = Modifier
-                    .padding(horizontal = 16.dp)
-            ) {
-                var excelPathInput by remember { mutableStateOf(linkedExcelFile ?: "/sdcard/Download/attendance_database.csv") }
-                var csvDataInput by remember { mutableStateOf("") }
-
-                Text(
-                    text = "External Excel/CSV Database Integration",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                Text(
-                    text = "Establish a dynamic link to an external spreadsheet to synchronize all employee directories and attendance logs into the offline-first Room database automatically.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-
-                // Current Link Status Card
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (excelLinkStatus == "ACTIVE (LINKED)") MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                    ),
-                    border = BorderStroke(
-                        width = 1.dp,
-                        color = if (excelLinkStatus == "ACTIVE (LINKED)") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Excel Database Status",
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = if (excelLinkStatus == "ACTIVE (LINKED)") "Linked to: $linkedExcelFile" else "No Spreadsheet database linked yet.",
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        Badge(
-                            containerColor = if (excelLinkStatus == "ACTIVE (LINKED)") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-                        ) {
-                            Text(
-                                text = excelLinkStatus,
-                                color = Color.White,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                }
-
-                // Link setup Card
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            text = "Spreadsheet File Configuration",
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-
-                        OutlinedTextField(
-                            value = excelPathInput,
-                            onValueChange = { excelPathInput = it },
-                            label = { Text("Local File Path or Remote Sheet URL") },
-                            placeholder = { Text("e.g. /sdcard/Documents/attendance_source.xlsx") },
-                            leadingIcon = { Icon(Icons.Default.Share, contentDescription = "Path Icon") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().testTag("excel_path_input")
-                        )
-
-                        Text(
-                            text = "Optionally, paste CSV formatted data below to simulate the loaded spreadsheet records:",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-
-                        OutlinedTextField(
-                            value = csvDataInput,
-                            onValueChange = { csvDataInput = it },
-                            label = { Text("Pasted CSV/Excel Content") },
-                            placeholder = { Text("Date,Employee Name,Role,Email,Status,Clock In,Clock Out,Overtime\n...") },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(120.dp)
-                                .testTag("excel_csv_content_input"),
-                            maxLines = 10
-                        )
-
-                        // Action Buttons Row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    csvDataInput = "Date,Employee Name,Role,Email,Status,Clock In,Clock Out,Overtime\n" +
-                                            "${viewModel.getCurrentDateString()},Emily Davis,EMPLOYEE,emily.emp@work.com,PRESENT,08:15,18:15,1.5\n" +
-                                            "${viewModel.getCurrentDateString()},Robert Johnson,SUPERVISOR,robert.sup@work.com,PRESENT,08:00,17:30,0.5\n" +
-                                            "${viewModel.getCurrentDateString()},Michael Brown,EMPLOYEE,michael.emp@work.com,PRESENT,09:00,17:00,0.0"
-                                },
-                                modifier = Modifier.weight(1f).testTag("load_sample_csv_button")
-                            ) {
-                                Text("Load Sample", fontSize = 12.sp)
-                            }
-
-                            Button(
-                                onClick = {
-                                    viewModel.linkExcelDatabase(excelPathInput, csvDataInput)
-                                },
-                                modifier = Modifier.weight(1.2f).testTag("link_excel_db_button")
-                            ) {
-                                Icon(Icons.Default.Check, contentDescription = "Link", modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Link & Synchronize", fontSize = 12.sp)
-                            }
-                        }
-
-                        if (excelLinkStatus == "ACTIVE (LINKED)") {
-                            OutlinedButton(
-                                onClick = { viewModel.unlinkExcelDatabase() },
-                                modifier = Modifier.fillMaxWidth().testTag("unlink_excel_db_button"),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                            ) {
-                                Text("Remove Spreadsheet Database Link")
-                            }
-                        }
-                    }
-                }
-
-                // Import feedback / success dialog inline
-                excelImportResult?.let { result ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f))
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Spreadsheet Synced Successfully",
-                                    fontWeight = FontWeight.Bold,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                                IconButton(
-                                    onClick = { viewModel.clearExcelImportResult() },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Dismiss",
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = result,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        4 -> { // Settings
+        3 -> { // Settings
             SettingsView(activeMember = activeMember, viewModel = viewModel)
         }
-        5 -> { // Inbox
+        4 -> { // Inbox
             val messages by viewModel.messages.collectAsStateWithLifecycle()
             InboxView(messages = messages, onMarkAsRead = { viewModel.markMessageAsRead(it) })
         }
+        5 -> { // Reports
+            ReportsDashboard(viewModel = viewModel, activeMember = activeMember)
+        }
+    }
+
+    if (assignSupervisorEmployee != null) {
+        val employee = assignSupervisorEmployee!!
+        val supervisorList = members.filter { it.role == "SUPERVISOR" }
+        AlertDialog(
+            onDismissRequest = { assignSupervisorEmployee = null },
+            title = { Text("Assign Supervisor to ${employee.name}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Select a supervisor to oversee ${employee.name}'s attendance and approvals. History will be kept for audit logs.",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    // Option to unassign supervisor
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.assignSupervisorToEmployee(employee.id, null)
+                                Toast.makeText(context, "Supervisor unassigned", Toast.LENGTH_SHORT).show()
+                                assignSupervisorEmployee = null
+                            },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (employee.supervisorId == null) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "None (Unassigned)",
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (employee.supervisorId == null) {
+                                Icon(Icons.Default.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+
+                    // List of supervisors
+                    supervisorList.forEach { supervisor ->
+                        val isSelected = employee.supervisorId == supervisor.id
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.assignSupervisorToEmployee(employee.id, supervisor.id)
+                                    Toast.makeText(context, "Assigned ${supervisor.name} as Supervisor", Toast.LENGTH_SHORT).show()
+                                    assignSupervisorEmployee = null
+                                },
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = supervisor.name,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (isSelected) {
+                                    Icon(Icons.Default.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { assignSupervisorEmployee = null }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 
     if (resetPasswordMember != null) {
@@ -2433,7 +2355,12 @@ fun AdminView(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        listOf("EMPLOYEE", "SUPERVISOR", "ADMIN").forEach { role ->
+                        val availableRoles = if (activeMember.role == "DEVELOPER" || activeMember.role == "SUPERSU") {
+                            listOf("EMPLOYEE", "SUPERVISOR", "ADMIN")
+                        } else {
+                            listOf("EMPLOYEE", "SUPERVISOR")
+                        }
+                        availableRoles.forEach { role ->
                             FilterChip(
                                 selected = (editRole == role),
                                 onClick = { editRole = role },
@@ -2477,15 +2404,33 @@ fun DeveloperView(
     currentTab: Int,
     onTabSelected: (Int) -> Unit
 ) {
-    val tabLabels = listOf(
-        stringResource(R.string.overview),
-        stringResource(R.string.admins),
-        stringResource(R.string.sync),
-        stringResource(R.string.settings)
-    )
+    val tabLabels = if (activeMember.role == "DEVELOPER") {
+        listOf(
+            stringResource(R.string.overview),
+            stringResource(R.string.admins),
+            stringResource(R.string.sync),
+            "Activity Logs",
+            stringResource(R.string.settings),
+            "Reports"
+        )
+    } else {
+        listOf(
+            stringResource(R.string.overview),
+            stringResource(R.string.admins),
+            stringResource(R.string.sync),
+            stringResource(R.string.settings),
+            "Reports"
+        )
+    }
     val activeLabel = tabLabels.getOrElse(currentTab) { "" }
     val linkedExcelFile by viewModel.linkedExcelFile.collectAsStateWithLifecycle()
     val excelLinkStatus by viewModel.excelLinkStatus.collectAsStateWithLifecycle()
+    val syncLogs by viewModel.syncLogs.collectAsStateWithLifecycle()
+
+    // Dialog state
+    var showAddAdminDialog by remember { mutableStateOf(false) }
+    var editAdminMember by remember { mutableStateOf<Member?>(null) }
+    var resetPasswordAdminMember by remember { mutableStateOf<Member?>(null) }
 
     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
         Text(
@@ -2496,7 +2441,20 @@ fun DeveloperView(
             modifier = Modifier.padding(vertical = 12.dp)
         )
 
-        when (currentTab) {
+        val actualTab = if (activeMember.role == "SUPERSU") {
+            when (currentTab) {
+                0 -> 0
+                1 -> 1
+                2 -> 2
+                3 -> 4
+                4 -> 5
+                else -> currentTab
+            }
+        } else {
+            currentTab
+        }
+
+        when (actualTab) {
             0 -> { // Overview
                 MetricCard(
                     title = stringResource(R.string.admins),
@@ -2507,26 +2465,112 @@ fun DeveloperView(
             }
             1 -> { // Admin Management
                 val admins = members.filter { it.role == "ADMIN" }
+                
+                // Add Admin Floating action button / Header button
+                Button(
+                    onClick = { showAddAdminDialog = true },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Add New Admin")
+                }
+
                 if (admins.isEmpty()) {
-                    Text(text = "No Admins registered.", modifier = Modifier.padding(16.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                    ) {
+                        Text(
+                            text = "No Admins registered. Click the button above to add one.",
+                            modifier = Modifier.padding(24.dp),
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 } else {
                     admins.forEach { admin ->
                         Card(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(16.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
-                                    Text(text = admin.name, fontWeight = FontWeight.Bold)
-                                    Text(text = admin.email, style = MaterialTheme.typography.bodySmall)
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = admin.name,
+                                                fontWeight = FontWeight.Bold,
+                                                style = MaterialTheme.typography.titleMedium
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Surface(
+                                                color = if (admin.isActive) Color(0xFF4CAF50).copy(alpha = 0.15f) else Color.Red.copy(alpha = 0.15f),
+                                                contentColor = if (admin.isActive) Color(0xFF2E7D32) else Color.Red,
+                                                shape = RoundedCornerShape(8.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (admin.isActive) "ACTIVE" else "INACTIVE",
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                        Text(text = admin.email, style = MaterialTheme.typography.bodySmall)
+                                        if (admin.title.isNotBlank()) {
+                                            Text(text = admin.title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
                                 }
-                                Row {
-                                    IconButton(onClick = { viewModel.removeTeamMember(admin) }) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
+                                
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Divider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Status switcher toggle
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Switch(
+                                            checked = admin.isActive,
+                                            onCheckedChange = { viewModel.toggleMemberActive(admin) }
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = if (admin.isActive) "Deactivate" else "Activate",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+
+                                    // Action buttons
+                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        IconButton(
+                                            onClick = { editAdminMember = admin },
+                                            modifier = Modifier.testTag("edit_admin_${admin.id}")
+                                        ) {
+                                            Icon(Icons.Default.Edit, contentDescription = "Edit Admin Details")
+                                        }
+                                        IconButton(
+                                            onClick = { resetPasswordAdminMember = admin },
+                                            modifier = Modifier.testTag("reset_password_admin_${admin.id}")
+                                        ) {
+                                            Icon(Icons.Default.Lock, contentDescription = "Reset Password")
+                                        }
+                                        IconButton(
+                                            onClick = { viewModel.removeTeamMember(admin) },
+                                            modifier = Modifier.testTag("delete_admin_${admin.id}")
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete Admin", tint = Color.Red)
+                                        }
                                     }
                                 }
                             }
@@ -2615,8 +2659,279 @@ fun DeveloperView(
                     }
                 }
             }
-            3 -> { // Settings
+            3 -> { // Activity Logs
+                val adminLogs = syncLogs.filter { it.status == "ADMIN_ACTION" }
+                if (adminLogs.isEmpty()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                    ) {
+                        Text(
+                            text = "No Admin activity logs found.",
+                            modifier = Modifier.padding(24.dp),
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        adminLogs.forEach { log ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        val actionTag = log.message.substringBefore(" Target:").substringAfter("[").substringBefore("]")
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                            contentColor = MaterialTheme.colorScheme.primary,
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = actionTag,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                        
+                                        // Simple formatted timestamp
+                                        val dateStr = try {
+                                            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(log.timestamp))
+                                        } catch (e: Exception) {
+                                            "Timestamp: ${log.timestamp}"
+                                        }
+                                        Text(
+                                            text = dateStr,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    
+                                    val targetPart = log.message.substringAfter("Target: ").substringBefore(" | Details:")
+                                    val detailsPart = log.message.substringAfter("Details: ")
+                                    
+                                    Text(
+                                        text = "Target Admin: $targetPart",
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = detailsPart,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            4 -> { // Settings
                 SettingsView(activeMember = activeMember, viewModel = viewModel)
+            }
+            5 -> { // Reports
+                ReportsDashboard(viewModel = viewModel, activeMember = activeMember)
+            }
+        }
+    }
+
+    // Add Admin Dialog
+    if (showAddAdminDialog) {
+        var nameInput by remember { mutableStateOf("") }
+        var titleInput by remember { mutableStateOf("") }
+        var emailInput by remember { mutableStateOf("") }
+        var requiresLocation by remember { mutableStateOf(false) }
+        var initialPasswordInput by remember { mutableStateOf("") }
+
+        Dialog(onDismissRequest = { showAddAdminDialog = false }) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                modifier = Modifier.fillMaxWidth().padding(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Create Admin User", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = nameInput,
+                        onValueChange = { nameInput = it },
+                        label = { Text("Full Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = titleInput,
+                        onValueChange = { titleInput = it },
+                        label = { Text("Job Title") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = emailInput,
+                        onValueChange = { emailInput = it },
+                        label = { Text("Email Address") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = initialPasswordInput,
+                        onValueChange = { initialPasswordInput = it },
+                        label = { Text("Initial Password") },
+                        placeholder = { Text("Default: 12345") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = requiresLocation, onCheckedChange = { requiresLocation = it })
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Require location for operations", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { showAddAdminDialog = false }) { Text("Cancel") }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = {
+                            if (nameInput.isNotBlank()) {
+                                viewModel.addTeamMember(
+                                    name = nameInput,
+                                    title = titleInput,
+                                    role = "ADMIN",
+                                    email = emailInput,
+                                    requiresLocation = requiresLocation,
+                                    password = if (initialPasswordInput.isNotBlank()) initialPasswordInput else "12345"
+                                )
+                                showAddAdminDialog = false
+                            }
+                        }) { Text("Create") }
+                    }
+                }
+            }
+        }
+    }
+
+    // Edit Admin Dialog
+    editAdminMember?.let { admin ->
+        var nameInput by remember { mutableStateOf(admin.name) }
+        var titleInput by remember { mutableStateOf(admin.title) }
+        var emailInput by remember { mutableStateOf(admin.email) }
+        var requiresLocation by remember { mutableStateOf(admin.requiresLocation) }
+
+        Dialog(onDismissRequest = { editAdminMember = null }) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                modifier = Modifier.fillMaxWidth().padding(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Edit Admin User", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = nameInput,
+                        onValueChange = { nameInput = it },
+                        label = { Text("Full Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = titleInput,
+                        onValueChange = { titleInput = it },
+                        label = { Text("Job Title") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = emailInput,
+                        onValueChange = { emailInput = it },
+                        label = { Text("Email Address") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = requiresLocation, onCheckedChange = { requiresLocation = it })
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Require location for operations", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { editAdminMember = null }) { Text("Cancel") }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = {
+                            if (nameInput.isNotBlank()) {
+                                viewModel.editTeamMember(
+                                    member = admin,
+                                    name = nameInput,
+                                    title = titleInput,
+                                    role = "ADMIN",
+                                    email = emailInput,
+                                    requiresLocation = requiresLocation
+                                )
+                                editAdminMember = null
+                            }
+                        }) { Text("Save") }
+                    }
+                }
+            }
+        }
+    }
+
+    // Reset Password Dialog
+    resetPasswordAdminMember?.let { admin ->
+        var newPassInput by remember { mutableStateOf("") }
+
+        Dialog(onDismissRequest = { resetPasswordAdminMember = null }) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp,
+                modifier = Modifier.fillMaxWidth().padding(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Reset Password", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Set a new password for Admin: ${admin.name}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = newPassInput,
+                        onValueChange = { newPassInput = it },
+                        label = { Text("New Password") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { resetPasswordAdminMember = null }) { Text("Cancel") }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(onClick = {
+                            if (newPassInput.isNotBlank()) {
+                                viewModel.setMemberPassword(admin.id, newPassInput)
+                                resetPasswordAdminMember = null
+                            }
+                        }) { Text("Reset") }
+                    }
+                }
             }
         }
     }
@@ -2634,7 +2949,8 @@ fun SupervisorView(
 ) {
     val tabLabels = listOf(
         stringResource(R.string.record_daily_roster),
-        stringResource(R.string.settings)
+        stringResource(R.string.settings),
+        "Reports"
     )
     val activeLabel = tabLabels.getOrElse(activeSubTab) { "" }
 
@@ -2792,6 +3108,9 @@ fun SupervisorView(
         }
         1 -> {
             SettingsView(activeMember = activeMember, viewModel = viewModel)
+        }
+        2 -> {
+            ReportsDashboard(viewModel = viewModel, activeMember = activeMember)
         }
     }
 }

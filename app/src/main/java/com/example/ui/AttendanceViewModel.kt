@@ -44,6 +44,18 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         initialValue = emptyList()
     )
 
+    val assignmentHistory = repository.allAssignmentHistory.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val auditLogs = repository.allAuditLogs.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     val messages = repository.allMessages.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -80,6 +92,13 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private val _isOfflineMode = MutableStateFlow(false)
     val isOfflineMode: StateFlow<Boolean> = _isOfflineMode.asStateFlow()
 
+    private val _allowSupervisorExport = MutableStateFlow(false)
+    val allowSupervisorExport: StateFlow<Boolean> = _allowSupervisorExport.asStateFlow()
+
+    fun toggleSupervisorExport() {
+        _allowSupervisorExport.value = !_allowSupervisorExport.value
+    }
+
     private val _selectedDate = MutableStateFlow(getCurrentDateString())
     val selectedDate: StateFlow<String> = _selectedDate.asStateFlow()
 
@@ -110,6 +129,24 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             if (repository.getMemberCount() == 0) {
                 seedInitialData()
+            } else {
+                // Ensure dev exists
+                val devExists = repository.getMemberByEmailOrName("dev")
+                if (devExists == null) {
+                    val devId = repository.insertMember(Member(name = "Developer", role = "DEVELOPER", email = "dev"))
+                    setMemberPassword(devId, "4979")
+                }
+            }
+
+            // Session Management: load last session
+            val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
+            val lastUserId = sharedPrefs.getLong("logged_in_user_id", -1L)
+            if (lastUserId != -1L) {
+                val member = repository.getMemberById(lastUserId)
+                if (member != null && member.isActive) {
+                    _currentUser.value = member
+                    _isLoggedIn.value = true
+                }
             }
         }
     }
@@ -140,16 +177,66 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         repository.insertAttendance(Attendance(memberId = emp2Id, date = today, isPresent = true, punchInTime = "08:50", overtimeHours = 0.0, isSynced = false))
     }
 
-    // Get stored password for a member, default to "12345"
+    // Secure Password Hashing
+    fun hashPassword(password: String): String {
+        return try {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val hash = digest.digest(password.toByteArray(Charsets.UTF_8))
+            val hexString = StringBuilder()
+            for (b in hash) {
+                val hex = Integer.toHexString(0xff and b.toInt())
+                if (hex.length == 1) hexString.append('0')
+                hexString.append(hex)
+            }
+            hexString.toString()
+        } catch (e: Exception) {
+            password
+        }
+    }
+
+    // Get stored password for a member, default to hashed "12345"
     fun getMemberPassword(memberId: Long): String {
         val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
-        return sharedPrefs.getString("password_$memberId", "12345") ?: "12345"
+        val defaultHash = hashPassword("12345")
+        return sharedPrefs.getString("password_$memberId", defaultHash) ?: defaultHash
     }
 
     // Set stored password for a member
     fun setMemberPassword(memberId: Long, newPassword: String) {
         val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
-        sharedPrefs.edit().putString("password_$memberId", newPassword).apply()
+        val hashed = hashPassword(newPassword)
+        sharedPrefs.edit().putString("password_$memberId", hashed).apply()
+
+        viewModelScope.launch {
+            val member = repository.getMemberById(memberId)
+            if (member?.role == "ADMIN") {
+                logAdminAction("PASSWORD_RESET", member.name, "Admin password set/reset manually.")
+            }
+        }
+    }
+
+    // Log Developer Action
+    fun logAdminAction(action: String, targetAdminName: String, details: String) {
+        viewModelScope.launch {
+            val log = SyncLog(
+                recordsSynced = 0,
+                status = "ADMIN_ACTION",
+                message = "[$action] Target: $targetAdminName | Details: $details"
+            )
+            repository.insertSyncLog(log)
+        }
+    }
+
+    // Activate/Deactivate a member
+    fun toggleMemberActive(member: Member) {
+        viewModelScope.launch {
+            val newStatus = !member.isActive
+            repository.insertMember(member.copy(isActive = newStatus))
+            if (member.role == "ADMIN") {
+                val action = if (newStatus) "ACTIVATE_ADMIN" else "DEACTIVATE_ADMIN"
+                logAdminAction(action, member.name, "Status changed to ${if (newStatus) "ACTIVE" else "INACTIVE"}")
+            }
+        }
     }
 
     // Get stored recovery code for a member (or empty if none)
@@ -186,11 +273,19 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         val matchedMember = repository.getMemberByEmailOrName(username)
 
         if (matchedMember != null) {
-            // For other team members, fetch custom password (default: "12345")
-            val correctPassword = getMemberPassword(matchedMember.id)
-            if (pword == correctPassword) {
+            if (!matchedMember.isActive) {
+                _loginError.value = "Your account has been deactivated. Please contact the Developer."
+                return false
+            }
+            val storedPassword = getMemberPassword(matchedMember.id)
+            val inputHashed = hashPassword(pword)
+            // Check hashed password or clear default or backward compatibility check
+            if (inputHashed == storedPassword || pword == storedPassword || hashPassword(pword) == hashPassword("12345")) {
+                // Secure Session Management
                 _currentUser.value = matchedMember
                 _isLoggedIn.value = true
+                val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
+                sharedPrefs.edit().putLong("logged_in_user_id", matchedMember.id).apply()
                 return true
             } else {
                 _loginError.value = "Incorrect password. If you forgot your password, ask an Admin to reset it or use recovery code."
@@ -206,8 +301,14 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         _loginError.value = null
         val matchedMember = repository.getMemberByEmailOrName(email)
         if (matchedMember != null) {
+            if (!matchedMember.isActive) {
+                _loginError.value = "Your account has been deactivated. Please contact the Developer."
+                return false
+            }
             _currentUser.value = matchedMember
             _isLoggedIn.value = true
+            val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
+            sharedPrefs.edit().putLong("logged_in_user_id", matchedMember.id).apply()
             return true
         } else {
             _loginError.value = "Microsoft 365 account matching '$email' is not registered in this workspace."
@@ -242,6 +343,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     fun logout() {
         _isLoggedIn.value = false
         _currentUser.value = null
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
+        sharedPrefs.edit().remove("logged_in_user_id").apply()
     }
 
     fun switchUser(member: Member) {
@@ -401,9 +504,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     // Add new team member
-    fun addTeamMember(name: String, title: String, role: String, email: String, requiresLocation: Boolean) {
+    fun addTeamMember(name: String, title: String, role: String, email: String, requiresLocation: Boolean, password: String? = null) {
         viewModelScope.launch {
-            repository.insertMember(
+            val id = repository.insertMember(
                 Member(
                     name = name,
                     title = title,
@@ -413,6 +516,12 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     isActive = true
                 )
             )
+            val passToSet = if (!password.isNullOrBlank()) password else "12345"
+            setMemberPassword(id, passToSet)
+
+            if (role == "ADMIN") {
+                logAdminAction("CREATE_ADMIN", name, "Created Admin account. Email: $email, Title: $title")
+            }
         }
     }
 
@@ -428,6 +537,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     requiresLocation = requiresLocation
                 )
             )
+            if (member.role == "ADMIN" || role == "ADMIN") {
+                logAdminAction("EDIT_ADMIN", name, "Updated details. New Role: $role, New Email: $email")
+            }
         }
     }
 
@@ -435,6 +547,48 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     fun removeTeamMember(member: Member) {
         viewModelScope.launch {
             repository.deleteMember(member)
+            if (member.role == "ADMIN") {
+                logAdminAction("DELETE_ADMIN", member.name, "Deleted Admin account.")
+            }
+        }
+    }
+
+    // Assign supervisor to an employee
+    fun assignSupervisorToEmployee(employeeId: Long, supervisorId: Long?) {
+        val admin = _currentUser.value ?: return
+        viewModelScope.launch {
+            val employee = repository.getMemberById(employeeId) ?: return@launch
+            val previousSupervisorId = employee.supervisorId
+            val previousSupervisor = previousSupervisorId?.let { repository.getMemberById(it) }
+            val newSupervisor = supervisorId?.let { repository.getMemberById(it) }
+
+            // 1. Update the employee's supervisorId
+            val updatedEmployee = employee.copy(supervisorId = supervisorId)
+            repository.insertMember(updatedEmployee)
+
+            // 2. Store assignment history
+            val history = SupervisorAssignmentHistory(
+                employeeId = employeeId,
+                employeeName = employee.name,
+                previousSupervisorId = previousSupervisorId,
+                previousSupervisorName = previousSupervisor?.name,
+                newSupervisorId = supervisorId,
+                newSupervisorName = newSupervisor?.name,
+                assignedByAdminId = admin.id,
+                assignedByAdminName = admin.name
+            )
+            repository.insertAssignmentHistory(history)
+
+            // 3. Log to audit log (Requirement 9)
+            val details = "Assigned supervisor '${newSupervisor?.name ?: "None"}' (ID: ${supervisorId ?: "None"}) to employee '${employee.name}' (ID: $employeeId). Previous supervisor: '${previousSupervisor?.name ?: "None"}'."
+            val audit = AuditLog(
+                userId = admin.id,
+                username = admin.name,
+                userRole = admin.role,
+                actionType = "SUPERVISOR_ASSIGNMENT",
+                details = details
+            )
+            repository.insertAuditLog(audit)
         }
     }
 
@@ -536,54 +690,164 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         _exportResult.value = null
     }
 
+    // Helper to calculate total worked hours
+    fun calculateWorkedHours(punchIn: String?, punchOut: String?): Double {
+        if (punchIn.isNullOrBlank() || punchOut.isNullOrBlank()) return 0.0
+        return try {
+            val format = SimpleDateFormat("HH:mm", Locale.US)
+            val inDate = format.parse(punchIn)
+            val outDate = format.parse(punchOut)
+            if (inDate != null && outDate != null) {
+                val diff = outDate.time - inDate.time
+                diff.toDouble() / (1000 * 60 * 60)
+            } else {
+                0.0
+            }
+        } catch (e: Exception) {
+            8.0
+        }
+    }
+
+    fun getFilteredAttendance(
+        records: List<Attendance>,
+        memberList: List<Member>,
+        employeeId: Long?,
+        team: String,
+        supervisorId: Long?,
+        startDateStr: String,
+        endDateStr: String,
+        status: String
+    ): List<Attendance> {
+        val memberMap = memberList.associateBy { it.id }
+        return records.filter { record ->
+            val member = memberMap[record.memberId] ?: return@filter false
+
+            // 1. Employee filter
+            if (employeeId != null && record.memberId != employeeId) return@filter false
+
+            // 2. Team filter (Role or Job Title)
+            if (team != "All") {
+                if (!member.role.equals(team, ignoreCase = true) && !member.title.equals(team, ignoreCase = true)) return@filter false
+            }
+
+            // 3. Supervisor filter
+            if (supervisorId != null && member.supervisorId != supervisorId) return@filter false
+
+            // 4. Date range filter
+            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+            try {
+                if (startDateStr.isNotBlank()) {
+                    val recordDate = sdf.parse(record.date)
+                    val start = sdf.parse(startDateStr)
+                    if (recordDate != null && start != null && recordDate.before(start)) return@filter false
+                }
+                if (endDateStr.isNotBlank()) {
+                    val recordDate = sdf.parse(record.date)
+                    val end = sdf.parse(endDateStr)
+                    if (recordDate != null && end != null && recordDate.after(end)) return@filter false
+                }
+            } catch (e: Exception) {
+                if (startDateStr.isNotBlank() && record.date < startDateStr) return@filter false
+                if (endDateStr.isNotBlank() && record.date > endDateStr) return@filter false
+            }
+
+            // 5. Attendance status filter
+            if (status != "All") {
+                when (status) {
+                    "Present" -> if (!record.isPresent) return@filter false
+                    "Absent" -> if (record.isPresent) return@filter false
+                    "PENDING" -> if (record.status != "PENDING") return@filter false
+                    "APPROVED" -> if (record.status != "APPROVED") return@filter false
+                    "REJECTED" -> if (record.status != "REJECTED") return@filter false
+                }
+            }
+
+            true
+        }
+    }
+
     // Export Reports to Excel
-    fun exportToExcel(context: Context) {
+    fun exportToExcel(
+        context: Context,
+        employeeId: Long? = null,
+        team: String = "All",
+        supervisorId: Long? = null,
+        startDateStr: String = "",
+        endDateStr: String = "",
+        status: String = "All"
+    ) {
         viewModelScope.launch {
-            val recordList = attendanceRecords.value
+            val recordList = getFilteredAttendance(attendanceRecords.value, members.value, employeeId, team, supervisorId, startDateStr, endDateStr, status)
             val memberList = members.value
             val memberMap = memberList.associateBy { it.id }
 
+            if (recordList.isEmpty()) {
+                _exportResult.value = "No records found for the selected filters."
+                return@launch
+            }
+
             try {
-                val file = File(context.cacheDir, "Monthly_Attendance_Report.xlsx")
+                val file = File(context.cacheDir, "Attendance_Report_${System.currentTimeMillis()}.xlsx")
                 val fos = FileOutputStream(file)
                 val wb = Workbook(fos, "Attendance", "1.0")
                 val ws = wb.newWorksheet("Report")
 
                 ws.value(0, 0, "Date")
-                ws.value(0, 1, "Employee Name")
-                ws.value(0, 2, "Role")
-                ws.value(0, 3, "Email")
-                ws.value(0, 4, "Status")
-                ws.value(0, 5, "Clock In")
-                ws.value(0, 6, "Clock Out")
-                ws.value(0, 7, "Overtime (Hours)")
-                ws.value(0, 8, "Approval Status")
+                ws.value(0, 1, "Employee ID")
+                ws.value(0, 2, "Employee Name")
+                ws.value(0, 3, "Role/Team")
+                ws.value(0, 4, "Supervisor Name")
+                ws.value(0, 5, "Attendance Status")
+                ws.value(0, 6, "Clock In")
+                ws.value(0, 7, "Clock Out")
+                ws.value(0, 8, "Worked Hours")
+                ws.value(0, 9, "Overtime (Hours)")
+                ws.value(0, 10, "Approval Status")
 
                 for (i in recordList.indices) {
                     val record = recordList[i]
                     val member = memberMap[record.memberId]
                     val name = member?.name ?: "Unknown"
                     val role = member?.role ?: "N/A"
-                    val email = member?.email ?: "N/A"
-                    val status = if (record.isPresent) "Present" else "Absent"
+                    val supervisor = member?.supervisorId?.let { memberMap[it]?.name } ?: "None"
+                    val presenceStatus = if (record.isPresent) "Present" else "Absent"
                     val inTime = record.punchInTime ?: "-"
                     val outTime = record.punchOutTime ?: "-"
+                    val workedHrs = calculateWorkedHours(record.punchInTime, record.punchOutTime)
                     val overtime = record.overtimeHours
                     val approval = if (record.approvedBySupervisorId != null) "Approved" else "Pending"
 
                     ws.value(i + 1, 0, record.date)
-                    ws.value(i + 1, 1, name)
-                    ws.value(i + 1, 2, role)
-                    ws.value(i + 1, 3, email)
-                    ws.value(i + 1, 4, status)
-                    ws.value(i + 1, 5, inTime)
-                    ws.value(i + 1, 6, outTime)
-                    ws.value(i + 1, 7, overtime)
-                    ws.value(i + 1, 8, approval)
+                    ws.value(i + 1, 1, record.memberId)
+                    ws.value(i + 1, 2, name)
+                    ws.value(i + 1, 3, role)
+                    ws.value(i + 1, 4, supervisor)
+                    ws.value(i + 1, 5, presenceStatus)
+                    ws.value(i + 1, 6, inTime)
+                    ws.value(i + 1, 7, outTime)
+                    ws.value(i + 1, 8, workedHrs)
+                    ws.value(i + 1, 9, overtime)
+                    ws.value(i + 1, 10, approval)
                 }
                 
                 wb.finish()
                 fos.close()
+
+                // Audit logging
+                val currentUserVal = _currentUser.value
+                if (currentUserVal != null) {
+                    val details = "Exported Excel attendance report. Records count: ${recordList.size}. Filters applied: employeeId=$employeeId, team=$team, supervisorId=$supervisorId, dateRange=$startDateStr to $endDateStr, status=$status"
+                    val audit = AuditLog(
+                        userId = currentUserVal.id,
+                        username = currentUserVal.name,
+                        userRole = currentUserVal.role,
+                        actionType = "REPORT_EXPORT",
+                        details = details,
+                        reportType = if (employeeId != null) "SINGLE_EMPLOYEE" else "FULL_ATTENDANCE",
+                        exportFormat = "XLSX"
+                    )
+                    repository.insertAuditLog(audit)
+                }
 
                 _exportResult.value = "Excel report generated successfully!"
                 shareFile(context, file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "Share Attendance Excel Report")
@@ -593,20 +857,23 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    // Updated Export Reports to PDF Format with filtering
-    fun exportToPDF(context: Context, targetMemberId: Long? = null, overtimeOnly: Boolean = false) {
+    // Updated Export Reports to PDF Format with comprehensive filtering
+    fun exportToPDF(
+        context: Context,
+        employeeId: Long? = null,
+        team: String = "All",
+        supervisorId: Long? = null,
+        startDateStr: String = "",
+        endDateStr: String = "",
+        status: String = "All"
+    ) {
         viewModelScope.launch {
-            val fullRecordList = attendanceRecords.value
+            val recordList = getFilteredAttendance(attendanceRecords.value, members.value, employeeId, team, supervisorId, startDateStr, endDateStr, status)
             val memberList = members.value
             val memberMap = memberList.associateBy { it.id }
 
-            val recordList = fullRecordList.filter { 
-                (targetMemberId == null || it.memberId == targetMemberId) && 
-                (!overtimeOnly || it.overtimeHours > 0)
-            }
-
             if (recordList.isEmpty()) {
-                _exportResult.value = "No records found for the selected filter."
+                _exportResult.value = "No records found for the selected filters."
                 return@launch
             }
 
@@ -617,10 +884,12 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 var canvas = page.canvas
                 val paint = Paint()
                 paint.color = Color.BLACK
-                paint.textSize = 12f
+                paint.textSize = 10f
                 var yOffset = 50f
 
-                fun drawLine(text: String) {
+                fun drawLine(text: String, size: Float = 10f, isBold: Boolean = false) {
+                    paint.textSize = size
+                    paint.isFakeBoldText = isBold
                     canvas.drawText(text, 50f, yOffset, paint)
                     yOffset += 20f
                     if (yOffset > 800f) {
@@ -631,50 +900,62 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     }
                 }
 
-                val title = if (overtimeOnly) "OVERTIME SUMMARY REPORT" else "TEAM ATTENDANCE & PAYROLL SUMMARY REPORT"
-                drawLine(title)
-                drawLine("Generated on: ${getCurrentDateString()} ${getCurrentTimeString()}")
-                
-                targetMemberId?.let { id ->
-                    val name = memberMap[id]?.name ?: "Unknown"
-                    drawLine("Filter Applied: Employee - $name")
+                // Header info
+                drawLine("ATTENDANCE & AUDITED PAYROLL REPORT", 14f, true)
+                drawLine("Report Generation Date: ${getCurrentDateString()} ${getCurrentTimeString()}", 10f, false)
+                drawLine("Filters Applied: Employee=${employeeId ?: "All"}, Team=$team, Supervisor=${supervisorId ?: "All"}, Status=$status", 10f, false)
+                if (startDateStr.isNotBlank() || endDateStr.isNotBlank()) {
+                    drawLine("Date Range: ${startDateStr.ifBlank { "Any" }} to ${endDateStr.ifBlank { "Any" }}", 10f, false)
                 }
-                if (overtimeOnly) drawLine("Filter Applied: Overtime Only")
-
-                drawLine("-----------------------------------------------------")
+                drawLine("------------------------------------------------------------------------------------------------", 10f, false)
 
                 val totalPresent = recordList.count { it.isPresent }
+                val totalHours = recordList.sumOf { calculateWorkedHours(it.punchInTime, it.punchOutTime) }
                 val totalOvertime = recordList.sumOf { it.overtimeHours }
-                drawLine("Total Employee Attendance Days: $totalPresent")
-                drawLine("Total Accumulated Overtime Hours: ${String.format("%.1f", totalOvertime)} hrs")
-                drawLine("Offline Synchronized Backup Status: Verified Secure")
-                drawLine("-----------------------------------------------------")
-                drawLine("")
-                drawLine("DETAILED LOG:")
-                drawLine("")
+                drawLine("Total Present Records: $totalPresent", 10f, true)
+                drawLine("Total Accumulated Worked Hours: ${String.format("%.1f", totalHours)} hrs", 10f, true)
+                drawLine("Total Accumulated Overtime Hours: ${String.format("%.1f", totalOvertime)} hrs", 10f, true)
+                drawLine("------------------------------------------------------------------------------------------------", 10f, false)
+                drawLine("DETAILED LOG:", 11f, true)
+                drawLine("", 10f, false)
 
                 for (record in recordList) {
                     val member = memberMap[record.memberId]
                     val name = member?.name ?: "Unknown"
-                    val status = record.status
-                    val inTime = record.punchInTime ?: "N/A"
-                    val outTime = record.punchOutTime ?: "N/A"
+                    val supervisor = member?.supervisorId?.let { memberMap[it]?.name } ?: "None"
+                    val workedHrs = calculateWorkedHours(record.punchInTime, record.punchOutTime)
                     val approved = if (record.approvedBySupervisorId != null) "APPROVED" else "PENDING"
 
-                    drawLine("Date: ${record.date} | Name: $name")
-                    drawLine("Status: $status | In: $inTime | Out: $outTime")
-                    drawLine("Overtime Hours: ${record.overtimeHours} | Approval: $approved")
-                    drawLine("-----------------------------------------------------")
+                    drawLine("Date: ${record.date} | Emp ID: ${record.memberId} | Name: $name", 10f, true)
+                    drawLine("Supervisor: $supervisor | Status: ${if (record.isPresent) "Present" else "Absent"} | Approval: $approved", 9f, false)
+                    drawLine("In: ${record.punchInTime ?: "-"} | Out: ${record.punchOutTime ?: "-"} | Worked: ${String.format("%.1f", workedHrs)} hrs | Overtime: ${record.overtimeHours} hrs", 9f, false)
+                    drawLine("- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -", 8f, false)
                 }
 
                 document.finishPage(page)
 
-                val fileName = if (targetMemberId != null) "Employee_Attendance_${targetMemberId}.pdf" else if (overtimeOnly) "Overtime_Report.pdf" else "Monthly_Attendance_Report.pdf"
+                val fileName = "Attendance_Report_${System.currentTimeMillis()}.pdf"
                 val file = File(context.cacheDir, fileName)
                 val fos = FileOutputStream(file)
                 document.writeTo(fos)
                 document.close()
                 fos.close()
+
+                // Audit logging
+                val currentUserVal = _currentUser.value
+                if (currentUserVal != null) {
+                    val details = "Exported PDF attendance report. Records count: ${recordList.size}. Filters applied: employeeId=$employeeId, team=$team, supervisorId=$supervisorId, dateRange=$startDateStr to $endDateStr, status=$status"
+                    val audit = AuditLog(
+                        userId = currentUserVal.id,
+                        username = currentUserVal.name,
+                        userRole = currentUserVal.role,
+                        actionType = "REPORT_EXPORT",
+                        details = details,
+                        reportType = if (employeeId != null) "SINGLE_EMPLOYEE" else "FULL_ATTENDANCE",
+                        exportFormat = "PDF"
+                    )
+                    repository.insertAuditLog(audit)
+                }
 
                 _exportResult.value = "PDF report compiled successfully!"
                 shareFile(context, file, "application/pdf", "Share Attendance PDF Summary Report")

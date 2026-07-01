@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material.icons.filled.Person
 import com.example.data.Member
 
 @Composable
@@ -27,6 +28,9 @@ fun TeamMembersDashboard(
     onRemoveMemberClick: (Member) -> Unit,
     onResetPasswordClick: (Member) -> Unit,
     onEditMemberClick: (Member) -> Unit,
+    activeMemberRole: String = "EMPLOYEE",
+    supervisors: List<Member> = emptyList(),
+    onAssignSupervisorClick: ((Member) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.padding(horizontal = 16.dp)) {
@@ -103,6 +107,16 @@ fun TeamMembersDashboard(
                                     fontSize = 10.sp
                                 )
                             }
+                            if (member.role == "EMPLOYEE") {
+                                val supervisor = supervisors.firstOrNull { it.id == member.supervisorId }
+                                Text(
+                                    text = "Supervisor: ${supervisor?.name ?: "None Assigned"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (supervisor != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
                         }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -121,6 +135,19 @@ fun TeamMembersDashboard(
                             )
                         }
                         Spacer(modifier = Modifier.width(8.dp))
+                        if (member.role == "EMPLOYEE" && (activeMemberRole == "ADMIN" || activeMemberRole == "DEVELOPER" || activeMemberRole == "SUPERSU") && onAssignSupervisorClick != null) {
+                            IconButton(
+                                onClick = { onAssignSupervisorClick(member) },
+                                modifier = Modifier.testTag("assign_supervisor_btn_${member.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = "Assign Supervisor",
+                                    tint = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
                         if (member.role != "ADMIN") {
                             IconButton(
                                 onClick = { onResetPasswordClick(member) },
