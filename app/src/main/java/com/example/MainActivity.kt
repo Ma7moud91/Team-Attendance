@@ -3618,6 +3618,9 @@ fun LoginScreen(
     var passwordVisible by remember { mutableStateOf(false) }
     val loginError by viewModel.loginError.collectAsStateWithLifecycle()
     val members by viewModel.members.collectAsStateWithLifecycle()
+    val isBiometricPreferred by viewModel.isBiometricPreferred.collectAsStateWithLifecycle()
+    val lastUserId = remember { viewModel.getLastLoggedInUserId() }
+    val lastUser = remember(lastUserId, members) { members.find { it.id == lastUserId } }
 
     var showRecoveryDialog by remember { mutableStateOf(false) }
     var recoveryEmail by remember { mutableStateOf("") }
@@ -3805,6 +3808,51 @@ fun LoginScreen(
                             .testTag("login_button")
                     ) {
                         Text("Log In", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    if (BiometricHelper.isBiometricAvailable(context) && lastUser != null && isBiometricPreferred) {
+                        OutlinedButton(
+                            onClick = {
+                                val activity = context as? androidx.fragment.app.FragmentActivity
+                                if (activity != null) {
+                                    BiometricHelper.showBiometricPrompt(
+                                        activity = activity,
+                                        title = "Biometric Login",
+                                        subtitle = "Authenticate to sign in as ${lastUser.name}",
+                                        onSuccess = {
+                                            coroutineScope.launch {
+                                                viewModel.loginWithBiometric(lastUser.id)
+                                                Toast.makeText(context, "Welcome back, ${lastUser.name}!", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        onError = { err ->
+                                            Toast.makeText(context, "Biometric failed: $err", Toast.LENGTH_SHORT).show()
+                                        }
+                                    )
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("biometric_login_button"),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                            )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Fingerprint,
+                                contentDescription = "Biometric Login Icon",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                "Login as ${lastUser.name} (Biometric)",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
 
                     Row(

@@ -106,7 +106,6 @@ fun ReportsDashboard(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(16.dp)
             .testTag("reports_dashboard_container"),
         verticalArrangement = Arrangement.spacedBy(16.dp)

@@ -152,6 +152,33 @@ fun SettingsView(
             Text(stringResource(id = R.string.change_password))
         }
 
+        if (BiometricHelper.isBiometricAvailable(context)) {
+            val isBiometricPreferred by viewModel.isBiometricPreferred.collectAsStateWithLifecycle()
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Biometric Authentication", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                        Text(
+                            "Enable fingerprint or face unlock for faster sign-in.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isBiometricPreferred,
+                        onCheckedChange = { viewModel.toggleBiometricPreferred() }
+                    )
+                }
+            }
+        }
+
         if (activeMember.role == "DEVELOPER" || activeMember.role == "SUPERSU" || activeMember.role == "ADMIN") {
             val supervisorExportPermitted by viewModel.allowSupervisorExport.collectAsStateWithLifecycle()
             Card(

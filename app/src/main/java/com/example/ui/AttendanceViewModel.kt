@@ -124,6 +124,40 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private val _supervisorPresence = MutableStateFlow<Map<Long, Boolean>>(emptyMap())
     val supervisorPresence = _supervisorPresence.asStateFlow()
 
+    private val _isBiometricPreferred = MutableStateFlow(true)
+    val isBiometricPreferred: StateFlow<Boolean> = _isBiometricPreferred.asStateFlow()
+
+    fun toggleBiometricPreferred() {
+        _isBiometricPreferred.value = !_isBiometricPreferred.value
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
+        sharedPrefs.edit().putBoolean("biometric_preferred", _isBiometricPreferred.value).apply()
+    }
+
+    fun getLastLoggedInUserId(): Long {
+        val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
+        return sharedPrefs.getLong("last_logged_in_user_id", -1L)
+    }
+
+    suspend fun loginWithBiometric(userId: Long): Boolean {
+        _loginError.value = null
+        val member = repository.getMemberById(userId)
+        if (member != null) {
+            if (!member.isActive) {
+                _loginError.value = "Your account has been deactivated. Please contact the Developer."
+                return false
+            }
+            _currentUser.value = member
+            _isLoggedIn.value = true
+            val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
+            sharedPrefs.edit().putLong("logged_in_user_id", member.id).apply()
+            sharedPrefs.edit().putLong("last_logged_in_user_id", member.id).apply()
+            return true
+        } else {
+            _loginError.value = "Registered biometric user not found."
+            return false
+        }
+    }
+
     init {
         // Pre-populate with seed data if empty
         viewModelScope.launch {
@@ -140,12 +174,14 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
             // Session Management: load last session
             val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
+            _isBiometricPreferred.value = sharedPrefs.getBoolean("biometric_preferred", true)
             val lastUserId = sharedPrefs.getLong("logged_in_user_id", -1L)
             if (lastUserId != -1L) {
                 val member = repository.getMemberById(lastUserId)
                 if (member != null && member.isActive) {
                     _currentUser.value = member
                     _isLoggedIn.value = true
+                    sharedPrefs.edit().putLong("last_logged_in_user_id", lastUserId).apply()
                 }
             }
         }
@@ -285,7 +321,10 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 _currentUser.value = matchedMember
                 _isLoggedIn.value = true
                 val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
-                sharedPrefs.edit().putLong("logged_in_user_id", matchedMember.id).apply()
+                sharedPrefs.edit()
+                    .putLong("logged_in_user_id", matchedMember.id)
+                    .putLong("last_logged_in_user_id", matchedMember.id)
+                    .apply()
                 return true
             } else {
                 _loginError.value = "Incorrect password. If you forgot your password, ask an Admin to reset it or use recovery code."
@@ -308,7 +347,10 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             _currentUser.value = matchedMember
             _isLoggedIn.value = true
             val sharedPrefs = getApplication<Application>().getSharedPreferences("user_credentials", Context.MODE_PRIVATE)
-            sharedPrefs.edit().putLong("logged_in_user_id", matchedMember.id).apply()
+            sharedPrefs.edit()
+                .putLong("logged_in_user_id", matchedMember.id)
+                .putLong("last_logged_in_user_id", matchedMember.id)
+                .apply()
             return true
         } else {
             _loginError.value = "Microsoft 365 account matching '$email' is not registered in this workspace."
