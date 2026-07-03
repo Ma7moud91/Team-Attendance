@@ -55,6 +55,7 @@ import com.example.ui.ContactAdminView
 import com.example.ui.BiometricHelper
 import com.example.ui.OvertimeDashboardWidget
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.ModernGeminiBackground
 import com.example.util.AuthStateObserver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -100,19 +101,22 @@ class MainActivity : FragmentActivity() {
             MyApplicationTheme(darkTheme = isDark) {
                 CompositionLocalProvider(androidx.compose.ui.platform.LocalLayoutDirection provides layoutDirection) {
                     val isLoggedIn by viewModel.isLoggedIn.collectAsStateWithLifecycle()
-                    Scaffold(
-                        modifier = Modifier.fillMaxSize()
-                    ) { innerPadding ->
-                        if (!isLoggedIn) {
-                            LoginScreen(
-                                viewModel = viewModel,
-                                modifier = Modifier.padding(innerPadding)
-                            )
-                        } else {
-                            MainScreen(
-                                viewModel = viewModel,
-                                modifier = Modifier.padding(innerPadding)
-                            )
+                    ModernGeminiBackground {
+                        Scaffold(
+                            modifier = Modifier.fillMaxSize(),
+                            containerColor = Color.Transparent
+                        ) { innerPadding ->
+                            if (!isLoggedIn) {
+                                LoginScreen(
+                                    viewModel = viewModel,
+                                    modifier = Modifier.padding(innerPadding)
+                                )
+                            } else {
+                                MainScreen(
+                                    viewModel = viewModel,
+                                    modifier = Modifier.padding(innerPadding)
+                                )
+                            }
                         }
                     }
                 }
@@ -416,6 +420,8 @@ fun MainScreen(
     val syncingState by viewModel.syncingState.collectAsStateWithLifecycle()
     val exportResult by viewModel.exportResult.collectAsStateWithLifecycle()
     val isFirebaseConnected by viewModel.isFirebaseConnected.collectAsStateWithLifecycle()
+    val successMessage by viewModel.successMessage.collectAsStateWithLifecycle()
+    val loginError by viewModel.loginError.collectAsStateWithLifecycle()
 
     var showAddMemberDialog by remember { mutableStateOf(false) }
 
@@ -431,6 +437,20 @@ fun MainScreen(
         exportResult?.let {
             Toast.makeText(context, it, Toast.LENGTH_LONG).show()
             viewModel.clearExportResult()
+        }
+    }
+
+    LaunchedEffect(successMessage) {
+        successMessage?.let {
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+            viewModel.clearMessages()
+        }
+    }
+
+    LaunchedEffect(loginError) {
+        loginError?.let {
+            Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+            viewModel.clearMessages()
         }
     }
 
@@ -451,7 +471,7 @@ fun MainScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(appleBackgroundBrush)
+            .background(Color.Transparent)
     ) {
         Column(
             modifier = Modifier
@@ -1165,7 +1185,7 @@ fun AdminView(
         }
         1 -> { // Team Directory Tab
             TeamMembersDashboard(
-                members = members.filter { it.role != "ADMIN" && it.role != "DEVELOPER" && it.role != "SUPERSU" },
+                members = members, // Show all members in the directory for Admin/Developer
                 onAddMemberClick = onAddMemberClick,
                 onRemoveMemberClick = { viewModel.removeTeamMember(it) },
                 onResetPasswordClick = { member ->
@@ -3540,7 +3560,7 @@ fun LoginScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(appleBackgroundBrush)
+            .background(Color.Transparent)
             .padding(16.dp),
         contentAlignment = Alignment.Center
     ) {

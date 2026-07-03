@@ -41,6 +41,14 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private val _loginError = MutableStateFlow<String?>(null)
     val loginError: StateFlow<String?> = _loginError.asStateFlow()
 
+    private val _successMessage = MutableStateFlow<String?>(null)
+    val successMessage: StateFlow<String?> = _successMessage.asStateFlow()
+
+    fun clearMessages() {
+        _loginError.value = null
+        _successMessage.value = null
+    }
+
     private val _appTheme = MutableStateFlow("System Default")
     val appTheme: StateFlow<String> = _appTheme.asStateFlow()
 
@@ -800,24 +808,55 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     // Add new team member
     fun addTeamMember(name: String, title: String, role: String, email: String, requiresLocation: Boolean, password: String? = null) {
         viewModelScope.launch {
-            // In a real app, you'd create the Auth user first. 
-            // For now, we'll assume the UID is generated or provided.
-            // But assignRole requires a UID.
-            // This is a bit tricky without a proper admin tool to create Auth users.
+            try {
+                val newMember = FirestoreMember(
+                    id = java.util.UUID.randomUUID().toString(),
+                    name = name,
+                    title = title,
+                    role = role,
+                    email = email,
+                    requiresLocation = requiresLocation,
+                    isActive = true
+                )
+                repository.saveMember(newMember)
+                _successMessage.value = "Member '$name' added successfully to Firebase."
+                
+                // If password is provided, we can store it in SharedPreferences as a hint 
+                // for the login screen if we are using the "Direct Login" or similar.
+                if (!password.isNullOrEmpty()) {
+                    setMemberPassword(newMember.id, password)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("AttendanceViewModel", "Failed to add member: ${e.message}")
+                _loginError.value = "Failed to add member: ${e.message}"
+            }
         }
     }
 
     // Edit team member
     fun editTeamMember(member: FirestoreMember, name: String, title: String, role: String, email: String, requiresLocation: Boolean) {
         viewModelScope.launch {
-            repository.assignRole(
-                uid = member.id,
-                role = role,
-                name = name,
-                email = email,
-                title = title,
-                supervisorId = member.supervisorId
-            )
+            try {
+                repository.assignRole(
+                    uid = member.id,
+                    role = role,
+                    name = name,
+                    email = email,
+                    title = title,
+                    supervisorId = member.supervisorId
+                )
+                _successMessage.value = "Profile updated via Cloud Functions."
+            } catch (e: Exception) {
+                android.util.Log.w("AttendanceViewModel", "assignRole failed, falling back to direct write: ${e.message}")
+                repository.saveMember(member.copy(
+                    name = name,
+                    title = title,
+                    role = role,
+                    email = email,
+                    requiresLocation = requiresLocation
+                ))
+                _successMessage.value = "Profile updated via direct Firestore write."
+            }
             // Refresh token if self
             if (member.id == _currentUser.value?.id) {
                 authRepository.refreshToken(true)

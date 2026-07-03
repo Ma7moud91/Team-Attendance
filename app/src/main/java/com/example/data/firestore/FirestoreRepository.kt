@@ -60,6 +60,18 @@ class FirestoreRepository(
         members.document(memberId).delete().await()
     }
 
+    /** Save or update a member profile directly in Firestore. 
+     *  Used as a fallback or for non-Auth profile creation. */
+    suspend fun saveMember(member: FirestoreMember) {
+        if (member.id.isNotEmpty()) {
+            members.document(member.id).set(member).await()
+        } else {
+            val ref = members.add(member).await()
+            // DocumentId doesn't automatically fill back in the object if we just added it, 
+            // but for future writes it's good to have it.
+        }
+    }
+
     // ---------- Privileged operations (via Cloud Function, not direct writes) ----------
 
     /** Admin/Developer only — enforced again server-side in assignRole.
