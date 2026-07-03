@@ -55,6 +55,7 @@ import com.example.ui.ContactAdminView
 import com.example.ui.BiometricHelper
 import com.example.ui.OvertimeDashboardWidget
 import com.example.ui.theme.MyApplicationTheme
+import com.example.util.AuthStateObserver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -70,6 +71,9 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Diagnostic Observer
+        AuthStateObserver()
+        
         enableEdgeToEdge()
         setContent {
             val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()

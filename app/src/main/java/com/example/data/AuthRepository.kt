@@ -45,16 +45,16 @@ class AuthRepository {
             "isActive" to true,
             "createdAt" to System.currentTimeMillis()
         )
-        // Write to Firestore /data/root/users collection
+        // Write to root 'members' collection which is used by FirestoreRepository
         try {
-            firestore.collection("data").document("root").collection(FirebaseConfig.COLLECTION_USERS).document(uid).set(userMap).await()
+            firestore.collection("members").document(uid).set(userMap).await()
         } catch (e: Exception) {
             // fail silently
         }
         
-        // Write to root 'users' collection as backup
+        // Also write to 'users' for redundancy/transition
         try {
-            firestore.collection(FirebaseConfig.COLLECTION_USERS).document(uid).set(userMap).await()
+            firestore.collection("users").document(uid).set(userMap).await()
         } catch (e: Exception) {
             // fail silently
         }

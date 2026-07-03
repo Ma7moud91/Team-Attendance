@@ -188,7 +188,10 @@ class FirestoreRepository(
 private inline fun <reified T : Any> Query.snapshots(): Flow<List<T>> = callbackFlow {
     val registration = addSnapshotListener { snapshot, error ->
         if (error != null) {
-            close(error)
+            android.util.Log.e("FirestoreRepository", "Query Error on ${T::class.simpleName}: ${error.message}")
+            // Don't close with exception to avoid crashing collectors that don't catch.
+            // Just emit empty or stop.
+            trySend(emptyList())
             return@addSnapshotListener
         }
         trySend(snapshot?.toObjects(T::class.java) ?: emptyList())
@@ -202,7 +205,8 @@ private inline fun <reified T : Any> Query.snapshots(): Flow<List<T>> = callback
 private inline fun <reified T : Any> com.google.firebase.firestore.DocumentReference.snapshot(): Flow<T?> = callbackFlow {
     val registration = addSnapshotListener { snapshot, error ->
         if (error != null) {
-            close(error)
+            android.util.Log.e("FirestoreRepository", "Doc Error on ${T::class.simpleName}: ${error.message}")
+            trySend(null)
             return@addSnapshotListener
         }
         trySend(snapshot?.toObject(T::class.java))

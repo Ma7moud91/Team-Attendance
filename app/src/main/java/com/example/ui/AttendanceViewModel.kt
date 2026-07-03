@@ -51,8 +51,17 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     val notifications: StateFlow<List<FirestoreNotification>> = _notifications.asStateFlow()
 
     // UI state streams
-    val members = _isLoggedIn.flatMapLatest { loggedIn ->
-        if (loggedIn) repository.allMembers else flowOf(emptyList())
+    val members = combine(_isLoggedIn, _currentUser) { loggedIn, user ->
+        loggedIn to user
+    }.flatMapLatest { (loggedIn, user) ->
+        if (loggedIn && (user?.role == "ADMIN" || user?.role == "DEVELOPER" || user?.role == "SUPERVISOR")) {
+            repository.allMembers
+        } else {
+            flowOf(emptyList())
+        }
+    }.catch { e ->
+        android.util.Log.e("AttendanceViewModel", "Error in members flow: ${e.message}")
+        emit(emptyList())
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -62,34 +71,76 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private val _selectedDate = MutableStateFlow(getCurrentDateString())
     val selectedDate: StateFlow<String> = _selectedDate.asStateFlow()
 
-    val attendanceRecords = combine(_isLoggedIn, _selectedDate) { loggedIn, date ->
-        loggedIn to date
-    }.flatMapLatest { (loggedIn, date) ->
-        if (loggedIn) repository.getAttendanceForDate(date) else flowOf(emptyList())
+    val attendanceRecords = combine(_isLoggedIn, _selectedDate, _currentUser) { loggedIn, date, user ->
+        Triple(loggedIn, date, user)
+    }.flatMapLatest { (loggedIn, date, user) ->
+        if (loggedIn) {
+            // Supervisors/Admins see all for date, Employees see only their own (handled by Firestore rules or here)
+            if (user?.role == "ADMIN" || user?.role == "DEVELOPER" || user?.role == "SUPERVISOR") {
+                repository.getAttendanceForDate(date)
+            } else {
+                // Employees can only see their own. 
+                // We'll return an empty list or fetch their own if we had a getMemberAttendanceForDate method that's safe.
+                // For now, avoid global read to prevent PERMISSION_DENIED.
+                flowOf(emptyList())
+            }
+        } else {
+            flowOf(emptyList())
+        }
+    }.catch { e ->
+        android.util.Log.e("AttendanceViewModel", "Error in attendanceRecords flow: ${e.message}")
+        emit(emptyList())
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
 
-    val assignmentHistory = _isLoggedIn.flatMapLatest { loggedIn ->
-        if (loggedIn) repository.allAssignmentHistory else flowOf(emptyList())
+    val assignmentHistory = combine(_isLoggedIn, _currentUser) { loggedIn, user ->
+        loggedIn to user
+    }.flatMapLatest { (loggedIn, user) ->
+        if (loggedIn && (user?.role == "ADMIN" || user?.role == "DEVELOPER")) {
+            repository.allAssignmentHistory
+        } else {
+            flowOf(emptyList())
+        }
+    }.catch { e ->
+        android.util.Log.e("AttendanceViewModel", "Error in assignmentHistory flow: ${e.message}")
+        emit(emptyList())
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
 
-    val auditLogs = _isLoggedIn.flatMapLatest { loggedIn ->
-        if (loggedIn) repository.allAuditLogs else flowOf(emptyList())
+    val auditLogs = combine(_isLoggedIn, _currentUser) { loggedIn, user ->
+        loggedIn to user
+    }.flatMapLatest { (loggedIn, user) ->
+        if (loggedIn && (user?.role == "ADMIN" || user?.role == "DEVELOPER")) {
+            repository.allAuditLogs
+        } else {
+            flowOf(emptyList())
+        }
+    }.catch { e ->
+        android.util.Log.e("AttendanceViewModel", "Error in auditLogs flow: ${e.message}")
+        emit(emptyList())
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
 
-    val messages = _isLoggedIn.flatMapLatest { loggedIn ->
-        if (loggedIn) repository.allMessages else flowOf(emptyList())
+    val messages = combine(_isLoggedIn, _currentUser) { loggedIn, user ->
+        loggedIn to user
+    }.flatMapLatest { (loggedIn, user) ->
+        if (loggedIn && (user?.role == "ADMIN" || user?.role == "DEVELOPER")) {
+            repository.allMessages
+        } else {
+            flowOf(emptyList())
+        }
+    }.catch { e ->
+        android.util.Log.e("AttendanceViewModel", "Error in messages flow: ${e.message}")
+        emit(emptyList())
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -164,7 +215,17 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     suspend fun loginWithBiometric(userId: String): Boolean {
         _loginError.value = null
         try {
-            val member = repository.getMemberById(userId)
+            // Check if we are signed in to Firebase Auth first
+            if (authRepository.getCurrentUser() == null) {
+                _loginError.value = "Biometric session expired. Please log in with password to re-activate."
+                return false
+            }
+
+            var member = repository.getMemberById(userId)
+            if (member == null) {
+                member = getCachedMemberProfile(userId)
+            }
+            
             if (member != null) {
                 if (!member.isActive) {
                     _loginError.value = "Your account has been deactivated. Please contact the Developer."
@@ -417,15 +478,34 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             // If they exist, get or match their profile to local members
             var matchedMember = repository.getMemberById(user.uid)
             
+            if (matchedMember == null) {
+                // Fallback search by email
+                matchedMember = repository.getMemberByEmailOrName(user.email ?: "")
+            }
+
             if (matchedMember == null && user.email == "eng.mahmoudahmed1991@gmail.com") {
                 // Auto-provision developer account
-                repository.assignRole(
-                    uid = user.uid,
-                    role = "DEVELOPER",
-                    name = user.displayName ?: "Developer Admin",
-                    email = user.email ?: "",
-                    title = "System Architect"
-                )
+                try {
+                    repository.assignRole(
+                        uid = user.uid,
+                        role = "DEVELOPER",
+                        name = user.displayName ?: "Developer Admin",
+                        email = user.email ?: "eng.mahmoudahmed1991@gmail.com",
+                        title = "System Architect"
+                    )
+                    // Wait a bit for Firestore to propagate
+                    kotlinx.coroutines.delay(800)
+                } catch (e: Exception) {
+                    // Fallback to direct write if Cloud Function fails or isn't deployed
+                    authRepository.createUserInFirestore(
+                        uid = user.uid,
+                        name = user.displayName ?: "Developer Admin",
+                        title = "System Architect",
+                        role = "DEVELOPER",
+                        email = user.email ?: "eng.mahmoudahmed1991@gmail.com"
+                    )
+                    kotlinx.coroutines.delay(500)
+                }
                 authRepository.refreshToken(true)
                 matchedMember = repository.getMemberById(user.uid)
             }
@@ -444,12 +524,19 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     .putString("last_logged_in_user_id", matchedMember.id)
                     .apply()
                 
+                cacheMemberProfile(matchedMember)
+                loadNotifications(matchedMember.id)
                 // Start observing the profile for real-time updates/offline resilience
                 observeCurrentUserProfile(matchedMember.id)
                 
                 return true
             } else {
-                _loginError.value = "User profile not found. Please contact an Administrator."
+                val errorMsg = if (user.email == "eng.mahmoudahmed1991@gmail.com") {
+                    "Developer profile initialization in progress. Please try logging in again in a few seconds."
+                } else {
+                    "User profile not found for ${user.email}. Please contact an Administrator."
+                }
+                _loginError.value = errorMsg
                 return false
             }
         } catch (e: Exception) {
@@ -465,8 +552,17 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             val uid = user.uid
             val nameFromEmail = email.substringBefore("@").replaceFirstChar { it.uppercase() }
             
-            // Auto-navigate to login or wait for admin approval
-            _loginError.value = "Account created. Please wait for an administrator to assign your role."
+            // Create a pending profile in Firestore 'members' using AuthRepository helper or direct write
+            authRepository.createUserInFirestore(
+                uid = uid,
+                name = nameFromEmail,
+                title = "New Member",
+                role = "EMPLOYEE",
+                email = email
+            )
+            
+            // Also notify that it's created and pending
+            _loginError.value = "Account created. You can now log in, but some features may be limited until an admin confirms your role."
             true
         } catch (e: Exception) {
             _loginError.value = "Sign Up error: ${e.message}"
