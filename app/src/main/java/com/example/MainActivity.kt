@@ -44,10 +44,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.Attendance
-import com.example.data.Member
-import com.example.data.SyncLog
+import com.example.data.firestore.*
 import com.example.ui.AttendanceViewModel
+
 import com.example.ui.ReportsDashboard
 import com.example.ui.TeamMembersDashboard
 import com.example.ui.SettingsView
@@ -58,6 +57,13 @@ import com.example.ui.OvertimeDashboardWidget
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+typealias Member = FirestoreMember
+typealias Attendance = FirestoreAttendance
+typealias AppNotification = FirestoreNotification
+typealias InboxMessage = FirestoreMessage
+typealias AuditLog = FirestoreAuditLog
+typealias SupervisorAssignmentHistory = FirestoreAssignmentHistory
 
 class MainActivity : FragmentActivity() {
     private val viewModel: AttendanceViewModel by viewModels()
@@ -116,11 +122,11 @@ fun RoleBasedActionsPanel(
     role: String,
     viewModel: AttendanceViewModel,
     onAddMemberClick: () -> Unit,
-    todayRecord: Attendance?,
+    todayRecord: FirestoreAttendance?,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val pendingCount = viewModel.attendanceRecords.collectAsStateWithLifecycle().value.count { it.isPresent && it.approvedBySupervisorId == null }
+    val pendingCount = viewModel.attendanceRecords.collectAsStateWithLifecycle().value.count { it.isPresent && it.status == "PENDING" && it.approvedBySupervisorId == null }
 
     Card(
         modifier = modifier
@@ -401,11 +407,11 @@ fun MainScreen(
     val context = LocalContext.current
     val members by viewModel.members.collectAsStateWithLifecycle()
     val attendanceRecords by viewModel.attendanceRecords.collectAsStateWithLifecycle()
-    val syncLogs by viewModel.syncLogs.collectAsStateWithLifecycle()
     val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
     val isOfflineMode by viewModel.isOfflineMode.collectAsStateWithLifecycle()
     val syncingState by viewModel.syncingState.collectAsStateWithLifecycle()
     val exportResult by viewModel.exportResult.collectAsStateWithLifecycle()
+    val isFirebaseConnected by viewModel.isFirebaseConnected.collectAsStateWithLifecycle()
 
     var showAddMemberDialog by remember { mutableStateOf(false) }
 
@@ -498,13 +504,17 @@ fun MainScreen(
             }
         }
 
-        // Offline Simulator Indicator Banner
+        // Connectivity & Offline Status Banner
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
             shape = RoundedCornerShape(12.dp),
-            color = if (isOfflineMode) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
+            color = when {
+                isOfflineMode -> MaterialTheme.colorScheme.errorContainer
+                !isFirebaseConnected -> MaterialTheme.colorScheme.tertiaryContainer
+                else -> MaterialTheme.colorScheme.primaryContainer
+            },
             tonalElevation = 4.dp
         ) {
             Row(
@@ -514,32 +524,54 @@ fun MainScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Icon(
-                        imageVector = if (isOfflineMode) Icons.Default.Warning else Icons.Default.Info,
+                        imageVector = when {
+                            isOfflineMode -> Icons.Default.Warning
+                            !isFirebaseConnected -> Icons.Default.Refresh
+                            else -> Icons.Default.Cloud
+                        },
                         contentDescription = "Status Icon",
-                        tint = if (isOfflineMode) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        tint = when {
+                            isOfflineMode -> MaterialTheme.colorScheme.error
+                            !isFirebaseConnected -> MaterialTheme.colorScheme.tertiary
+                            else -> MaterialTheme.colorScheme.primary
+                        },
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = if (isOfflineMode) "Working Offline" else "Cloud Connected",
-                            fontWeight = FontWeight.Bold,
-                            color = if (isOfflineMode) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer
+                            text = when {
+                                isOfflineMode -> "Working Offline"
+                                !isFirebaseConnected -> "Cloud Disconnected"
+                                else -> "Cloud Connected"
+                            },
+                            fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = if (isOfflineMode) "Saving clock-ins locally (no internet)" else "Synchronized with secure cloud backup",
+                            text = when {
+                                isOfflineMode -> "Manual offline override active."
+                                !isFirebaseConnected -> "Could not reach Firestore. Check internet."
+                                else -> "Synchronized with secure cloud backup."
+                            },
                             fontSize = 12.sp,
-                            color = if (isOfflineMode) MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-                Switch(
-                    checked = isOfflineMode,
-                    onCheckedChange = { viewModel.toggleOfflineMode() },
-                    modifier = Modifier.testTag("offline_toggle")
-                )
+                
+                if (!isOfflineMode && !isFirebaseConnected) {
+                    IconButton(onClick = { viewModel.checkFirebaseConnection() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Retry Connection")
+                    }
+                } else {
+                    Switch(
+                        checked = isOfflineMode,
+                        onCheckedChange = { viewModel.toggleOfflineMode() },
+                        modifier = Modifier.testTag("offline_toggle")
+                    )
+                }
             }
         }
 
@@ -650,7 +682,6 @@ fun MainScreen(
                         activeMember = activeMember,
                         members = members,
                         attendanceRecords = attendanceRecords,
-                        syncLogs = syncLogs,
                         syncingState = syncingState,
                         onAddMemberClick = { showAddMemberDialog = true },
                         currentTab = adminTab,
@@ -924,7 +955,6 @@ fun AdminView(
     activeMember: Member,
     members: List<Member>,
     attendanceRecords: List<Attendance>,
-    syncLogs: List<SyncLog>,
     syncingState: Boolean,
     onAddMemberClick: () -> Unit,
     currentTab: Int,
@@ -1049,8 +1079,8 @@ fun AdminView(
                         modifier = Modifier.weight(1f)
                     )
                     MetricCard(
-                        title = "Unsynced",
-                        value = "${attendanceRecords.count { !it.isSynced }} recs",
+                        title = "Pending Approvals",
+                        value = "${attendanceRecords.count { it.isPresent && it.status == "PENDING" && it.approvedBySupervisorId == null }}",
                         icon = Icons.Default.Warning,
                         modifier = Modifier.weight(1f)
                     )
@@ -1315,7 +1345,7 @@ fun AdminView(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                var reportsFilterMemberId by remember { mutableStateOf<Long?>(null) }
+                var reportsFilterMemberId by remember { mutableStateOf<String?>(null) }
                 var reportsFilterApprovedOnly by remember { mutableStateOf(false) }
 
                 // Filter Controls (M3 Chips Row)
@@ -1612,7 +1642,7 @@ fun AdminView(
                 var searchText by remember { mutableStateOf("") }
                 var selectedStatusFilter by remember { mutableStateOf("ALL") } // ALL, PRESENT, ABSENT
                 var selectedApprovalFilter by remember { mutableStateOf("ALL") } // ALL, APPROVED, PENDING
-                var selectedEmployeeIdFilter by remember { mutableStateOf<Long?>(null) } // null means All
+                var selectedEmployeeIdFilter by remember { mutableStateOf<String?>(null) } // null means All
 
                 // Dynamic filter controls
                 Card(
@@ -2009,59 +2039,33 @@ fun AdminView(
                 Spacer(modifier = Modifier.height(24.dp))
 
                 Text(
-                    text = "Backup Audit Logs",
+                    text = "Cloud Sync Status",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                if (syncLogs.isEmpty()) {
-                    Text(
-                        "No cloud backup sync runs executed yet.",
-                        modifier = Modifier
-                            .padding(16.dp)
-                            .fillMaxWidth(),
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
-                    )
-                } else {
-                    syncLogs.forEach { log ->
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = log.message,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = "Synced count: ${log.recordsSynced} records",
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(12.dp))
-                                Badge(
-                                    containerColor = if (log.status == "SUCCESS") MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer
-                                ) {
-                                    Text(
-                                        text = log.status,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text(
+                                text = "Firestore Real-time Sync Active",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                text = "All attendance records and member data are automatically synchronized with the cloud database in real-time.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
                         }
                     }
                 }
@@ -2408,7 +2412,7 @@ fun DeveloperView(
         listOf(
             stringResource(R.string.overview),
             stringResource(R.string.admins),
-            stringResource(R.string.sync),
+            "Firestore Settings",
             "Activity Logs",
             stringResource(R.string.settings),
             "Reports"
@@ -2417,7 +2421,7 @@ fun DeveloperView(
         listOf(
             stringResource(R.string.overview),
             stringResource(R.string.admins),
-            stringResource(R.string.sync),
+            "Firestore Settings",
             stringResource(R.string.settings),
             "Reports"
         )
@@ -2425,7 +2429,6 @@ fun DeveloperView(
     val activeLabel = tabLabels.getOrElse(currentTab) { "" }
     val linkedExcelFile by viewModel.linkedExcelFile.collectAsStateWithLifecycle()
     val excelLinkStatus by viewModel.excelLinkStatus.collectAsStateWithLifecycle()
-    val syncLogs by viewModel.syncLogs.collectAsStateWithLifecycle()
 
     // Dialog state
     var showAddAdminDialog by remember { mutableStateOf(false) }
@@ -2578,161 +2581,41 @@ fun DeveloperView(
                     }
                 }
             }
-            2 -> { // Sync & Database Link Control
-                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    var excelPathInput by remember { mutableStateOf(linkedExcelFile ?: "/sdcard/Download/attendance_database.csv") }
-                    var csvDataInput by remember { mutableStateOf("") }
-
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Text(text = "Global Sync Configuration", fontWeight = FontWeight.Bold)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Button(
-                                onClick = { viewModel.synchronizeCloud() },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Force Global Database Sync")
-                            }
-                        }
-                    }
-
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text(
-                                text = "Developer Database Link Control",
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-
-                            OutlinedTextField(
-                                value = excelPathInput,
-                                onValueChange = { excelPathInput = it },
-                                label = { Text("Database Sync Link (URL/Path)") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
-
-                            Text(
-                                text = "Optional CSV Data Override:",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-
-                            OutlinedTextField(
-                                value = csvDataInput,
-                                onValueChange = { csvDataInput = it },
-                                label = { Text("CSV Payload") },
-                                modifier = Modifier.fillMaxWidth().height(100.dp)
-                            )
-                            
-                            Button(
-                                onClick = { 
-                                    viewModel.linkExcelDatabase(excelPathInput, csvDataInput)
-                                    viewModel.synchronizeCloud()
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.Check, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Update Link & Force Sync")
-                            }
-
-                            if (excelLinkStatus == "ACTIVE (LINKED)") {
-                                OutlinedButton(
-                                    onClick = { viewModel.unlinkExcelDatabase() },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                                ) {
-                                    Text("Unlink Database")
-                                }
-                            }
+            2 -> { // Firestore Settings
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(text = "Firestore Configuration", fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "This application is now powered by Google Firebase Firestore. Database synchronization is handled automatically by the cloud infrastructure.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = { viewModel.synchronizeCloud() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Manually Trigger Sync Refresh")
                         }
                     }
                 }
             }
-            3 -> { // Activity Logs
-                val adminLogs = syncLogs.filter { it.status == "ADMIN_ACTION" }
-                if (adminLogs.isEmpty()) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                    ) {
-                        Text(
-                            text = "No Admin activity logs found.",
-                            modifier = Modifier.padding(24.dp),
-                            textAlign = TextAlign.Center,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        adminLogs.forEach { log ->
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                            ) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        val actionTag = log.message.substringBefore(" Target:").substringAfter("[").substringBefore("]")
-                                        Surface(
-                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                            contentColor = MaterialTheme.colorScheme.primary,
-                                            shape = RoundedCornerShape(6.dp)
-                                        ) {
-                                            Text(
-                                                text = actionTag,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                        
-                                        // Simple formatted timestamp
-                                        val dateStr = try {
-                                            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(log.timestamp))
-                                        } catch (e: Exception) {
-                                            "Timestamp: ${log.timestamp}"
-                                        }
-                                        Text(
-                                            text = dateStr,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    
-                                    val targetPart = log.message.substringAfter("Target: ").substringBefore(" | Details:")
-                                    val detailsPart = log.message.substringAfter("Details: ")
-                                    
-                                    Text(
-                                        text = "Target Admin: $targetPart",
-                                        fontWeight = FontWeight.SemiBold,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = detailsPart,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                    }
+            3 -> { // Activity Logs (Placeholder)
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                ) {
+                    Text(
+                        text = "System audit logs are now managed via Firestore Audit Collection. Implementation for this view is pending.",
+                        modifier = Modifier.padding(24.dp),
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
             4 -> { // Settings
@@ -3616,11 +3499,10 @@ fun LoginScreen(
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+    var isSignUpMode by remember { mutableStateOf(false) }
     val loginError by viewModel.loginError.collectAsStateWithLifecycle()
-    val members by viewModel.members.collectAsStateWithLifecycle()
     val isBiometricPreferred by viewModel.isBiometricPreferred.collectAsStateWithLifecycle()
-    val lastUserId = remember { viewModel.getLastLoggedInUserId() }
-    val lastUser = remember(lastUserId, members) { members.find { it.id == lastUserId } }
+    val lastUser = remember { viewModel.getLastCachedUser() }
 
     var showRecoveryDialog by remember { mutableStateOf(false) }
     var recoveryEmail by remember { mutableStateOf("") }
@@ -3636,7 +3518,6 @@ fun LoginScreen(
     var microsoftLoginError by remember { mutableStateOf<String?>(null) }
 
     var showDevPasscodeDialog by remember { mutableStateOf(false) }
-    var showDevLoginScreen by remember { mutableStateOf(false) }
 
     val appTheme by viewModel.appTheme.collectAsStateWithLifecycle()
     val isDark = when (appTheme) {
@@ -3652,177 +3533,13 @@ fun LoginScreen(
         }
     )
 
-    if (showDevLoginScreen) {
-        // Developer Login Screen Composable
-        var devUserVal by remember { mutableStateOf("") }
-        var devPasswordVal by remember { mutableStateOf("") }
-        var devPassVisible by remember { mutableStateOf(false) }
-        var devErrorText by remember { mutableStateOf<String?>(null) }
-
-        LaunchedEffect(Unit) {
-            // Verify authorization again when Developer screen loads
-            if (!com.example.ui.DeveloperAuthService.isDeveloperAuthorized(context)) {
-                showDevLoginScreen = false
-                Toast.makeText(context, "Unauthorized. Session expired.", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .background(appleBackgroundBrush)
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Developer Logo / Icon
-                Box(
-                    modifier = Modifier
-                        .size(80.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
-                        .border(BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Build,
-                        contentDescription = "Developer Logo",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(40.dp)
-                    )
-                }
-
-                Text(
-                    text = stringResource(R.string.developer_access),
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-
-                Text(
-                    text = "Authenticate with Developer System Credentials",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                GlassCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    containerAlpha = 0.35f,
-                    borderAlpha = 0.3f
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = devUserVal,
-                            onValueChange = { 
-                                devUserVal = it
-                                devErrorText = null
-                            },
-                            label = { Text(stringResource(R.string.username)) },
-                            placeholder = { Text("e.g., dev") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().testTag("dev_username_input")
-                        )
-
-                        OutlinedTextField(
-                            value = devPasswordVal,
-                            onValueChange = { 
-                                devPasswordVal = it
-                                devErrorText = null
-                            },
-                            label = { Text(stringResource(R.string.password)) },
-                            singleLine = true,
-                            visualTransformation = if (devPassVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                            trailingIcon = {
-                                IconButton(onClick = { devPassVisible = !devPassVisible }) {
-                                    Icon(
-                                        imageVector = if (devPassVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                        contentDescription = "Toggle password visibility"
-                                    )
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth().testTag("dev_password_input")
-                        )
-
-                        if (devErrorText != null) {
-                            Text(
-                                text = devErrorText ?: "",
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        Button(
-                            onClick = {
-                                coroutineScope.launch {
-                                    try {
-                                        // Verify authorization again on login click
-                                        if (!com.example.ui.DeveloperAuthService.isDeveloperAuthorized(context)) {
-                                            showDevLoginScreen = false
-                                            Toast.makeText(context, "Unauthorized. Session expired.", Toast.LENGTH_SHORT).show()
-                                            return@launch
-                                        }
-
-                                        val success = viewModel.login(devUserVal, devPasswordVal)
-                                        if (success) {
-                                            Toast.makeText(context, "Developer authenticated successfully", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            devErrorText = context.getString(R.string.invalid_developer_credentials)
-                                        }
-                                    } catch (e: Exception) {
-                                        devErrorText = e.message ?: "Authentication failed"
-                                    }
-                                }
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                                .testTag("dev_login_button")
-                        ) {
-                            Text("Login")
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                showDevLoginScreen = false
-                                devUserVal = ""
-                                devPasswordVal = ""
-                                devErrorText = null
-                                com.example.ui.DeveloperAuthService.setDeveloperAuthorized(context, false)
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(50.dp)
-                                .testTag("dev_cancel_button")
-                        ) {
-                            Text(stringResource(R.string.cancel))
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        Box(
-            modifier = modifier
-                .fillMaxSize()
-                .background(appleBackgroundBrush)
-                .padding(16.dp),
-            contentAlignment = Alignment.Center
-        ) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(appleBackgroundBrush)
+            .padding(16.dp),
+        contentAlignment = Alignment.Center
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -3867,14 +3584,14 @@ fun LoginScreen(
             }
 
             Text(
-                text = stringResource(R.string.welcome_back),
+                text = if (isSignUpMode) "Create Account" else stringResource(R.string.welcome_back),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground
             )
 
             Text(
-                text = stringResource(R.string.sign_in_desc),
+                text = if (isSignUpMode) "Register your workspace credentials to get started" else stringResource(R.string.sign_in_desc),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center,
@@ -3976,7 +3693,11 @@ fun LoginScreen(
                     Button(
                         onClick = {
                             coroutineScope.launch {
-                                viewModel.login(username, password)
+                                if (isSignUpMode) {
+                                    viewModel.signUp(username, password)
+                                } else {
+                                    viewModel.login(username, password)
+                                }
                             }
                         },
                         modifier = Modifier
@@ -3984,50 +3705,74 @@ fun LoginScreen(
                             .height(48.dp)
                             .testTag("login_button")
                     ) {
-                        Text("Log In", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        Text(if (isSignUpMode) "Sign Up" else "Log In", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     }
 
-                    if (BiometricHelper.isBiometricAvailable(context) && lastUser != null && isBiometricPreferred) {
+                    TextButton(
+                        onClick = {
+                            isSignUpMode = !isSignUpMode
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = if (isSignUpMode) "Already have an account? Log In" else "Don't have an account? Sign Up",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    if (lastUser != null) {
+                        val isDirectLoginAvailable = (lastUser.role == "ADMIN" || lastUser.role == "DEVELOPER") && com.example.ui.DeveloperAuthService.isDeveloperAuthorized(context)
+                        
                         OutlinedButton(
                             onClick = {
-                                val activity = context as? androidx.fragment.app.FragmentActivity
-                                if (activity != null) {
-                                    BiometricHelper.showBiometricPrompt(
-                                        activity = activity,
-                                        title = "Biometric Login",
-                                        subtitle = "Authenticate to sign in as ${lastUser.name}",
-                                        onSuccess = {
-                                            coroutineScope.launch {
-                                                viewModel.loginWithBiometric(lastUser.id)
-                                                Toast.makeText(context, "Welcome back, ${lastUser.name}!", Toast.LENGTH_SHORT).show()
+                                if (isDirectLoginAvailable) {
+                                    coroutineScope.launch {
+                                        viewModel.login(lastUser.email, "")
+                                    }
+                                } else {
+                                    val activity = context as? androidx.fragment.app.FragmentActivity
+                                    if (activity != null && BiometricHelper.isBiometricAvailable(context) && isBiometricPreferred) {
+                                        BiometricHelper.showBiometricPrompt(
+                                            activity = activity,
+                                            title = "Biometric Login",
+                                            subtitle = "Authenticate to sign in as ${lastUser.name}",
+                                            onSuccess = {
+                                                coroutineScope.launch {
+                                                    viewModel.loginWithBiometric(lastUser.id)
+                                                    Toast.makeText(context, "Welcome back, ${lastUser.name}!", Toast.LENGTH_SHORT).show()
+                                                }
+                                            },
+                                            onError = { err ->
+                                                Toast.makeText(context, "Biometric failed: $err", Toast.LENGTH_SHORT).show()
                                             }
-                                        },
-                                        onError = { err ->
-                                            Toast.makeText(context, "Biometric failed: $err", Toast.LENGTH_SHORT).show()
-                                        }
-                                    )
+                                        )
+                                    } else {
+                                        username = lastUser.email
+                                    }
                                 }
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
-                                .testTag("biometric_login_button"),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
+                                .testTag("login_as_button"),
+                            border = BorderStroke(1.dp, if (isDirectLoginAvailable) MaterialTheme.colorScheme.tertiary.copy(alpha = 0.5f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)),
                             colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                                containerColor = if (isDirectLoginAvailable) MaterialTheme.colorScheme.tertiary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
                             )
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Fingerprint,
-                                contentDescription = "Biometric Login Icon",
-                                tint = MaterialTheme.colorScheme.primary
+                                imageVector = if (isDirectLoginAvailable) Icons.Default.Shield else Icons.Default.Fingerprint,
+                                contentDescription = "Login Icon",
+                                tint = if (isDirectLoginAvailable) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                "Login as ${lastUser.name} (Biometric)",
+                                if (isDirectLoginAvailable) "Direct Login as ${lastUser.name}" else "Login as ${lastUser.name} (Biometric)",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary
+                                color = if (isDirectLoginAvailable) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
                             )
                         }
                     }
@@ -4086,37 +3831,8 @@ fun LoginScreen(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-
-                // All roles (Seeded from DB dynamically)
-                members.forEach { member ->
-                    val currentPass = viewModel.getMemberPassword(member.id)
-                    Card(
-                        onClick = {
-                            coroutineScope.launch {
-                                username = member.email
-                                password = currentPass
-                                viewModel.login(member.email, currentPass)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                    ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column {
-                                    Text("${member.role} role", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary)
-                                    Text("User: ${member.email} | Pass: $currentPass", style = MaterialTheme.typography.bodyMedium)
-                                }
-                                Icon(imageVector = Icons.Default.ArrowForward, contentDescription = "Login")
-                            }
-                        }
-                    }
+        }
+    }
 
     if (showMicrosoftLoginDialog) {
         AlertDialog(
@@ -4377,14 +4093,21 @@ fun LoginScreen(
                     onClick = {
                         try {
                             val isVerified = com.example.ui.DeveloperAuthService.verifyPasscode(context, devPasscodeInput) { status, msg ->
-                                viewModel.logAdminAction("DEV_ACCESS_$status", "Developer", msg)
+                                // viewModel.logAdminAction("DEV_ACCESS_$status", "Developer", msg)
                             }
                             if (isVerified) {
                                 com.example.ui.DeveloperAuthService.setDeveloperAuthorized(context, true)
                                 showDevPasscodeDialog = false
                                 devPasscodeInput = ""
                                 devPasscodeError = null
-                                showDevLoginScreen = true
+                                
+                                // Auto-login as developer if authorized
+                                coroutineScope.launch {
+                                    val success = viewModel.login("eng.mahmoudahmed1991@gmail.com", "")
+                                    if (!success) {
+                                        Toast.makeText(context, "Direct Developer access enabled locally.", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             } else {
                                 devPasscodeError = context.getString(R.string.incorrect_passcode)
                             }
@@ -4410,9 +4133,6 @@ fun LoginScreen(
                 }
             }
         )
-    }
-            }
-        }
     }
 }
 

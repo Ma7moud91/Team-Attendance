@@ -24,8 +24,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.Attendance
-import com.example.data.Member
+import com.example.data.firestore.*
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -43,9 +42,9 @@ fun ReportsDashboard(
     val exportResult by viewModel.exportResult.collectAsStateWithLifecycle()
 
     // Filter states
-    var selectedEmployeeId by remember { mutableStateOf<Long?>(null) }
+    var selectedEmployeeId by remember { mutableStateOf<String?>(null) }
     var selectedTeam by remember { mutableStateOf("All") }
-    var selectedSupervisorId by remember { mutableStateOf<Long?>(null) }
+    var selectedSupervisorId by remember { mutableStateOf<String?>(null) }
     var startDateInput by remember { mutableStateOf("") }
     var endDateInput by remember { mutableStateOf("") }
     var selectedStatus by remember { mutableStateOf("All") }

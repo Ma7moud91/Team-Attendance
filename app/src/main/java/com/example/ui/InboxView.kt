@@ -8,7 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.data.InboxMessage
+import com.example.data.firestore.FirestoreMessage
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -16,7 +16,7 @@ import java.util.Locale
 @Composable
 fun InboxView(
     messages: List<InboxMessage>,
-    onMarkAsRead: (Long) -> Unit,
+    onMarkAsRead: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.padding(16.dp)) {

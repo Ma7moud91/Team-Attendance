@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "455469717046",
+    "project_id": "team-attendance-f5421",
+    "storage_bucket": "team-attendance-f5421.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:455469717046:android:b17b9942a50b398d45aa97",
+        "android_client_info": {
+          "package_name": "com.aistudio.teamattendance.yxtzwp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBkZWziLpEOtMY6WHtzj_izFfLScP4IJ8M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

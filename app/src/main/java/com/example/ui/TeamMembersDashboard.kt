@@ -19,7 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.Person
-import com.example.data.Member
+import com.example.data.firestore.FirestoreMember
 
 @Composable
 fun TeamMembersDashboard(

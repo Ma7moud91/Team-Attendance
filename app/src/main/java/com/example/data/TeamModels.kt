@@ -5,7 +5,7 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "members")
 data class Member(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @PrimaryKey val id: Long = 0,
     val name: String,
     val title: String = "",
     val role: String, // "ADMIN", "SUPERVISOR", "EMPLOYEE"
@@ -13,7 +13,8 @@ data class Member(
     val requiresLocation: Boolean = false,
     val profileImage: String? = null,
     val isActive: Boolean = true,
-    val supervisorId: Long? = null
+    val supervisorId: Long? = null,
+    val uid: String? = null
 )
 
 @Entity(tableName = "supervisor_assignment_history")
@@ -45,7 +46,7 @@ data class AuditLog(
 
 @Entity(tableName = "attendance")
 data class Attendance(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @PrimaryKey val id: Long = 0,
     val memberId: Long,
     val date: String, // "YYYY-MM-DD"
     val isPresent: Boolean,

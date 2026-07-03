@@ -1,0 +1,107 @@
+rules_version = '2';
+// Team Attendance — Firestore security rules
+//
+// Authorization is driven entirely by the request.auth.token.role CUSTOM
+// CLAIM, never by a "role" field stored on a document. Custom claims live
+// inside the signed Firebase Auth ID token, so a client cannot forge or
+// edit its own role. They are set exclusively by the assignRole Cloud
+// Function (see functions/src/index.ts), which itself checks that the
+// CALLER is already an Admin/Developer before granting anything.
+//
+// members/{uid} — document id is the Firebase Auth uid, so
+// request.auth.uid can be compared directly against it for ownership.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ---------- helpers ----------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function role() {
+      return request.auth.token.role;
+    }
+    function isDeveloper() {
+      return isSignedIn() && role() == 'DEVELOPER';
+    }
+    function isAdmin() {
+      return isSignedIn() && role() == 'ADMIN';
+    }
+    function isSupervisor() {
+      return isSignedIn() && role() == 'SUPERVISOR';
+    }
+    function isEmployee() {
+      return isSignedIn() && role() == 'EMPLOYEE';
+    }
+    function isPrivileged() {
+      return isAdmin() || isDeveloper();
+    }
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+    function onlyFieldsChanged(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+
+    // ---------- members/{uid} : profile + role, doc id == Auth uid ----------
+    match /members/{memberId} {
+      allow read: if isPrivileged() || isSelf(memberId) || (isSupervisor() && resource.data.supervisorId == request.auth.uid);
+      // Real provisioning happens via assignRole (Admin SDK). This direct
+      // path exists only as an admin convenience/fallback.
+      allow create: if isPrivileged();
+      // A member may touch their own display fields only — never their
+      // own role or supervisorId.
+      allow update: if isPrivileged() || (isSelf(memberId) && onlyFieldsChanged(['profileImage', 'title']));
+      allow delete: if isPrivileged();
+    }
+
+    // ---------- attendance/{id} ----------
+    match /attendance/{attendanceId} {
+      allow read: if isPrivileged() || resource.data.memberId == request.auth.uid || (isSupervisor() && resource.data.supervisorId == request.auth.uid);
+      // Employees punch in/out for themselves only, always starting PENDING.
+      // supervisorId is intentionally NOT settable here — it's stamped
+      // server-side by the onAttendanceCreate Cloud Function so a client
+      // can never forge or omit which supervisor should see the record.
+      allow create: if isPrivileged() || (isEmployee() && request.resource.data.memberId == request.auth.uid && request.resource.data.status == 'PENDING' && (!('supervisorId' in request.resource.data) || request.resource.data.supervisorId == null));
+      // Supervisors may only flip status/approval fields on their own
+      // team's records. Employees may only edit punch details, and only
+      // while their own record is still PENDING.
+      allow update: if isPrivileged() || (isSupervisor() && resource.data.supervisorId == request.auth.uid && onlyFieldsChanged(['status', 'approvedBySupervisorId', 'rejectionReason'])) || (isEmployee() && resource.data.memberId == request.auth.uid && resource.data.status == 'PENDING' && onlyFieldsChanged(['punchInTime', 'punchOutTime', 'overtimeHours', 'locationData']));
+      allow delete: if isPrivileged();
+    }
+
+    // ---------- notifications/{id} : per-member, system/admin generated ----------
+    match /notifications/{id} {
+      allow read: if isPrivileged() || resource.data.memberId == request.auth.uid;
+      allow create: if isPrivileged();
+      allow update: if isPrivileged() || (resource.data.memberId == request.auth.uid && onlyFieldsChanged(['isRead']));
+      allow delete: if isPrivileged();
+    }
+
+    // ---------- messages/{id} : employee -> admin inbox (Contact Admin) ----------
+    match /messages/{id} {
+      allow read: if isPrivileged() || resource.data.senderId == request.auth.uid;
+      allow create: if isSignedIn() && request.resource.data.senderId == request.auth.uid;
+      allow update: if isPrivileged() && onlyFieldsChanged(['isRead']);
+      allow delete: if isPrivileged();
+    }
+
+    // ---------- supervisor_assignment_history/{id} : audit trail ----------
+    // Written by assignRole via the Admin SDK. Read-only to clients.
+    match /supervisor_assignment_history/{id} {
+      allow read: if isPrivileged();
+      allow write: if false;
+    }
+
+    // ---------- audit_logs/{id} : write only via Cloud Functions ----------
+    // Admin SDK writes bypass rules entirely, so keeping client writes
+    // closed here is what makes this trail tamper-resistant from a device.
+    match /audit_logs/{id} {
+      allow read: if isPrivileged();
+      allow write: if false;
+    }
+
+    // Deny anything not explicitly matched above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

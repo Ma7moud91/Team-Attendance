@@ -1,114 +1,111 @@
 package com.example.data
 
-import androidx.room.Dao
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
-import androidx.room.Delete
+import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface AttendanceDao {
-    // Member Queries
+
+    // --- Members ---
     @Query("SELECT * FROM members ORDER BY name ASC")
     fun getAllMembers(): Flow<List<Member>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertMember(member: Member): Long
+    suspend fun insertMember(member: Member)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMembers(members: List<Member>)
 
     @Delete
     suspend fun deleteMember(member: Member)
 
-    @Query("SELECT * FROM members WHERE id = :id LIMIT 1")
-    suspend fun getMemberById(id: Long): Member?
+    @Query("DELETE FROM members")
+    suspend fun clearMembers()
 
-    @Query("SELECT COUNT(*) FROM members")
-    suspend fun getMemberCount(): Int
 
-    @Query("SELECT * FROM members WHERE email = :identifier OR name = :identifier LIMIT 1")
-    suspend fun getMemberByEmailOrName(identifier: String): Member?
-
-    // Attendance Queries
-    @Query("SELECT * FROM attendance WHERE date = :date")
-    fun getAttendanceForDate(date: String): Flow<List<Attendance>>
-
+    // --- Attendance ---
     @Query("SELECT * FROM attendance ORDER BY date DESC")
     fun getAllAttendance(): Flow<List<Attendance>>
 
-    @Query("SELECT * FROM attendance WHERE memberId = :memberId ORDER BY date DESC")
-    fun getAttendanceForMember(memberId: Long): Flow<List<Attendance>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAttendance(attendance: Attendance)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAttendance(attendance: Attendance): Long
+    suspend fun insertAttendances(attendances: List<Attendance>)
 
     @Delete
     suspend fun deleteAttendance(attendance: Attendance)
 
-    @Query("DELETE FROM attendance WHERE memberId = :memberId")
-    suspend fun deleteAttendanceForMember(memberId: Long)
+    @Query("DELETE FROM attendance")
+    suspend fun clearAttendance()
 
-    @Query("DELETE FROM attendance WHERE approvedBySupervisorId IS NULL")
-    suspend fun deleteUnapprovedAttendance()
 
-    @Query("SELECT * FROM attendance WHERE date = :date AND memberId = :memberId LIMIT 1")
-    suspend fun getAttendanceForMemberAndDate(memberId: Long, date: String): Attendance?
-
-    @Query("UPDATE attendance SET approvedBySupervisorId = :supervisorId, status = 'APPROVED' WHERE id = :id")
-    suspend fun approveAttendance(id: Long, supervisorId: Long)
-
-    @Query("UPDATE attendance SET status = 'REJECTED', rejectionReason = :reason WHERE id = :id")
-    suspend fun rejectAttendance(id: Long, reason: String)
-
-    @Query("SELECT * FROM attendance WHERE id = :id LIMIT 1")
-    suspend fun getAttendanceById(id: Long): Attendance?
-
-    @Query("UPDATE attendance SET isSynced = 1 WHERE isSynced = 0")
-    suspend fun markAllAsSynced()
-
-    @Query("SELECT * FROM attendance WHERE isSynced = 0")
-    suspend fun getUnsyncedAttendance(): List<Attendance>
-
-    // Sync Log Queries
+    // --- Sync Logs ---
     @Query("SELECT * FROM sync_logs ORDER BY timestamp DESC")
     fun getAllSyncLogs(): Flow<List<SyncLog>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertSyncLog(log: SyncLog): Long
+    suspend fun insertSyncLog(syncLog: SyncLog)
 
-    // Message Queries
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSyncLogs(syncLogs: List<SyncLog>)
+
+    @Query("DELETE FROM sync_logs")
+    suspend fun clearSyncLogs()
+
+
+    // --- Inbox Messages ---
     @Query("SELECT * FROM messages ORDER BY timestamp DESC")
     fun getAllMessages(): Flow<List<InboxMessage>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertMessage(message: InboxMessage): Long
-
-    @Query("UPDATE messages SET isRead = 1 WHERE id = :id")
-    suspend fun markMessageAsRead(id: Long)
-
-    // Notification Queries
-    @Query("SELECT * FROM notifications WHERE memberId = :memberId ORDER BY timestamp DESC")
-    fun getNotificationsForMember(memberId: Long): Flow<List<AppNotification>>
+    suspend fun insertMessage(message: InboxMessage)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertNotification(notification: AppNotification): Long
+    suspend fun insertMessages(messages: List<InboxMessage>)
 
-    @Query("UPDATE notifications SET isRead = 1 WHERE id = :id")
-    suspend fun markNotificationAsRead(id: Long)
+    @Query("DELETE FROM messages")
+    suspend fun clearMessages()
 
-    @Query("UPDATE members SET profileImage = :imageUri WHERE id = :memberId")
-    suspend fun updateMemberProfileImage(memberId: Long, imageUri: String)
 
-    // Supervisor Assignment History Queries
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAssignmentHistory(history: SupervisorAssignmentHistory): Long
-
+    // --- Supervisor Assignment History ---
     @Query("SELECT * FROM supervisor_assignment_history ORDER BY timestamp DESC")
     fun getAllAssignmentHistory(): Flow<List<SupervisorAssignmentHistory>>
 
-    // Audit Log Queries
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAuditLog(log: AuditLog): Long
+    suspend fun insertAssignmentHistory(history: SupervisorAssignmentHistory)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAssignmentHistories(histories: List<SupervisorAssignmentHistory>)
+
+    @Query("DELETE FROM supervisor_assignment_history")
+    suspend fun clearAssignmentHistory()
+
+
+    // --- Audit Logs ---
     @Query("SELECT * FROM audit_logs ORDER BY timestamp DESC")
     fun getAllAuditLogs(): Flow<List<AuditLog>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAuditLog(auditLog: AuditLog)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAuditLogs(auditLogs: List<AuditLog>)
+
+    @Query("DELETE FROM audit_logs")
+    suspend fun clearAuditLogs()
+
+
+    // --- Notifications ---
+    @Query("SELECT * FROM notifications ORDER BY timestamp DESC")
+    fun getAllNotifications(): Flow<List<AppNotification>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertNotification(notification: AppNotification)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertNotifications(notifications: List<AppNotification>)
+
+    @Query("DELETE FROM notifications")
+    suspend fun clearNotifications()
 }

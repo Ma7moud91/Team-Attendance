@@ -25,7 +25,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.rememberAsyncImagePainter
-import com.example.data.Member
+import com.example.data.firestore.FirestoreMember
 import com.example.R
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
